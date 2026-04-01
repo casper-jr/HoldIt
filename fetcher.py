@@ -10,6 +10,26 @@ from config import DART_API_KEY
 from database import SessionLocal
 from models import Company, RawFinancialData, QualitativeAssessment, FetchHistory
 
+
+def _krx_dividend_label_year(ts) -> int:
+    """
+    yfinance 배당 지급일을 '연간 총액·연속 인상'용 연도로 바꿉니다.
+    KRX에서는 결산 배당이 이듬해 1~2월에 찍히는 경우가 많아, 해당 분기만 전년도로 묶습니다.
+    """
+    t = pd.Timestamp(ts)
+    if t.month in (1, 2):
+        return t.year - 1
+    return t.year
+
+
+def _krx_yearly_dividend_totals(dividends: pd.Series) -> pd.Series:
+    """KRX 관행 반영: 연도별 합계 Series (인덱스 = 집계 연도)."""
+    if dividends.empty:
+        return pd.Series(dtype=float)
+    labels = dividends.index.map(_krx_dividend_label_year)
+    return dividends.groupby(labels).sum()
+
+
 class DartFetcher:
     def __init__(self):
         self.api_key = DART_API_KEY
@@ -227,10 +247,11 @@ class DartFetcher:
                         
                     market_data['current_price'] = float(current_price)
                     market_data['total_shares'] = float(info.get('sharesOutstanding', 0))
-                    # 1주당 연간 배당금: TTM이 아닌, 지급일 기준 직전 캘린더 연도의 총 배당금을 사용합니다.
+                    # 1주당 연간 배당금·연속 인상: TTM이 아님. KRX는 1~2월 지급분을 전년도로 묶은 뒤
+                    # '직전 완료 연도(last_year)' 합계를 쓴다 (결산 배당이 캘린더만 쓸 때 연도가 갈라지는 문제 방지).
                     dividends = ticker.dividends
                     if not dividends.empty:
-                        yearly_divs = dividends.groupby(dividends.index.year).sum()
+                        yearly_divs = _krx_yearly_dividend_totals(dividends)
                         
                         current_year = pd.Timestamp.now().year
                         last_year = current_year - 1
@@ -247,22 +268,23 @@ class DartFetcher:
                         if len(recent_divs) >= 3:
                             market_data['quarterly_dividend'] = True
                             
-                        # 2. 배당 연속 인상 연수 확인
-                        years = sorted(yearly_divs.index.tolist(), reverse=True)
-                        
-                        if len(years) > 1:
-                            start_idx = 0
-                            # 현재 연도 배당금이 작년보다 적으면(아직 덜 줬으면) 작년부터 계산 시작
-                            if yearly_divs[years[0]] < yearly_divs[years[1]]:
-                                start_idx = 1
-                                
-                            last_val = yearly_divs[years[start_idx]]
-                            for y in years[start_idx+1:]:
-                                if last_val > yearly_divs[y]:
-                                    market_data['dividend_increase_years'] += 1
-                                    last_val = yearly_divs[y]
+                        # 2. 배당 연속 인상 연수: 연간 합계는 캘린더 연도별로 두고,
+                        #    dividend_per_share와 동일하게 '직전 완료 연도(last_year)'를 끝점으로 삼는다.
+                        #    last_year > last_year-1 > ... 를 (y, y-1)가 모두 데이터에 있을 때만 strict 비교한다.
+                        #    중간에 배당 실적이 없는 해(인덱스 없음)가 끼면 연속이 끊긴 것으로 본다.
+                        if last_year in yearly_divs.index:
+                            y = int(last_year)
+                            streak = 0
+                            while True:
+                                prev_y = y - 1
+                                if prev_y not in yearly_divs.index:
+                                    break
+                                if float(yearly_divs[y]) > float(yearly_divs[prev_y]):
+                                    streak += 1
+                                    y = prev_y
                                 else:
-                                    break # 인상되지 않은 해를 만나면 중단
+                                    break
+                            market_data['dividend_increase_years'] = streak
                     
                     print(f"📈 yfinance 데이터 수집 성공 ({yf_ticker}): 현재가 {market_data['current_price']:,.0f}원")
                     print(f"   └─ 분기배당: {market_data['quarterly_dividend']} | 연속인상: {market_data['dividend_increase_years']}년")

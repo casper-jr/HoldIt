@@ -155,9 +155,9 @@ def show_leaderboard(limit=50):
             raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == score.ticker).order_by(RawFinancialData.record_date.desc()).first()
             processed = db.query(ProcessedFinancialData).filter(ProcessedFinancialData.ticker == score.ticker).order_by(ProcessedFinancialData.record_date.desc()).first()
             
-            # 값 포맷팅 (예: 12.3배(5점))
-            per_str = f"{processed.per:.1f}배({score.score_per}점)" if processed and processed.per > 0 else f"-({score.score_per}점)"
-            pbr_str = f"{processed.pbr:.2f}배({score.score_pbr}점)" if processed and processed.pbr > 0 else f"-({score.score_pbr}점)"
+            # 값 포맷팅 (예: 12.3(5점))
+            per_str = f"{processed.per:.1f} ({score.score_per}점)" if processed and processed.per > 0 else f"-({score.score_per}점)"
+            pbr_str = f"{processed.pbr:.2f} ({score.score_pbr}점)" if processed and processed.pbr > 0 else f"-({score.score_pbr}점)"
             div_yield_str = f"{processed.dividend_yield:.1f}%({score.score_div_yield}점)" if processed else f"-({score.score_div_yield}점)"
             
             q_div_str = f"{'O' if raw and raw.quarterly_dividend else 'X'}({score.score_div_quarter}점)"

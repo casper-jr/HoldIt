@@ -1,10 +1,16 @@
 import sys
 import unicodedata
+import csv
+import time
+import ssl
+import urllib.request
+from datetime import date, datetime
+import FinanceDataReader as fdr
+
 from fetcher import DartFetcher
 from processor import FinancialProcessor
 from scorer import StockScorer
 from database import SessionLocal
-from datetime import date
 from models import Company, RawFinancialData, ProcessedFinancialData, ScoringResult, FetchHistory
 
 def fetch_data(limit=None):
@@ -16,11 +22,6 @@ def fetch_data(limit=None):
     limit_text = "전체" if limit is None else f"{limit}개"
     print(f"📥 [1단계: 수집] {limit_text} 종목 원본 데이터 수집 시작")
     print(f"========================================\n")
-    
-    import FinanceDataReader as fdr
-    import ssl
-    import urllib.request
-    import time
     
     # macOS 등에서 SSL 인증서 에러 방지용
     ssl._create_default_https_context = ssl._create_unverified_context
@@ -97,8 +98,6 @@ def score_data():
     scorer = StockScorer()
     scorer.score_all()
 
-import unicodedata
-
 def get_display_width(s):
     """
     문자열의 실제 출력 너비를 계산합니다.
@@ -142,16 +141,31 @@ def show_leaderboard(limit=50):
             print("❌ 표시할 평가 결과가 없습니다. (27점 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
             return
 
-        print(f"\n=====================================================================================================================================")
+        print(f"\n=====================================================================================================================================================================")
         print(f"🏆 우량주 평가 리더보드 (Top {limit}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
-        print(f"=====================================================================================================================================")
+        print(f"=====================================================================================================================================================================")
         
         # 헤더 출력
-        header = f"{pad_string('순위', 5)} | {pad_string('종목명', 16)} | {pad_string('종목코드', 8)} | {pad_string('총점', 5)} | {pad_string('등급', 4)} | {pad_string('PER', 4)} | {pad_string('PBR', 4)} | {pad_string('배당수익', 8)} | {pad_string('분기배당', 8)} | {pad_string('배당인상', 8)} | {pad_string('자사주비율', 10)} | {pad_string('매입소각', 8)}"
+        header = f"{pad_string('순위', 5)} | {pad_string('종목명', 16)} | {pad_string('종목코드', 8)} | {pad_string('총점', 5)} | {pad_string('등급', 4)} | {pad_string('PER', 12)} | {pad_string('PBR', 12)} | {pad_string('배당수익', 14)} | {pad_string('분기배당', 12)} | {pad_string('배당인상', 12)} | {pad_string('자사주비율', 15)} | {pad_string('매입소각', 12)}"
         print(header)
-        print("-" * 133)
+        print("-" * 165)
 
         for i, (score, company_name) in enumerate(results, 1):
+            # 실제 값을 가져오기 위해 Raw, Processed 데이터 조회
+            raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == score.ticker).order_by(RawFinancialData.record_date.desc()).first()
+            processed = db.query(ProcessedFinancialData).filter(ProcessedFinancialData.ticker == score.ticker).order_by(ProcessedFinancialData.record_date.desc()).first()
+            
+            # 값 포맷팅 (예: 12.3배(5점))
+            per_str = f"{processed.per:.1f}배({score.score_per}점)" if processed and processed.per > 0 else f"-({score.score_per}점)"
+            pbr_str = f"{processed.pbr:.2f}배({score.score_pbr}점)" if processed and processed.pbr > 0 else f"-({score.score_pbr}점)"
+            div_yield_str = f"{processed.dividend_yield:.1f}%({score.score_div_yield}점)" if processed else f"-({score.score_div_yield}점)"
+            
+            q_div_str = f"{'O' if raw and raw.quarterly_dividend else 'X'}({score.score_div_quarter}점)"
+            div_inc_str = f"{raw.dividend_increase_years}년({score.score_div_inc}점)" if raw else f"-({score.score_div_inc}점)"
+            
+            treasury_str = f"{processed.treasury_share_ratio:.1f}%({score.score_treasury_ratio}점)" if processed else f"-({score.score_treasury_ratio}점)"
+            buyback_str = f"{'O' if raw and raw.share_buyback_cancel else 'X'}({score.score_buyback}점)"
+
             # 종목명이 너무 길면 자르기 (한글 너비 고려)
             name_display = company_name
             if get_display_width(name_display) > 14:
@@ -166,10 +180,10 @@ def show_leaderboard(limit=50):
                     temp_width += w
                 name_display = temp_name + "..."
 
-            row = f"{pad_string(i, 5)} | {pad_string(name_display, 16)} | {pad_string(score.ticker, 8)} | {pad_string(score.total_score, 5)} | {pad_string(score.grade, 4)} | {pad_string(score.score_per, 4)} | {pad_string(score.score_pbr, 4)} | {pad_string(score.score_div_yield, 8)} | {pad_string(score.score_div_quarter, 8)} | {pad_string(score.score_div_inc, 8)} | {pad_string(score.score_treasury_ratio, 10)} | {pad_string(score.score_buyback, 8)}"
+            row = f"{pad_string(i, 5)} | {pad_string(name_display, 16)} | {pad_string(score.ticker, 8)} | {pad_string(score.total_score, 5)} | {pad_string(score.grade, 4)} | {pad_string(per_str, 12)} | {pad_string(pbr_str, 12)} | {pad_string(div_yield_str, 14)} | {pad_string(q_div_str, 12)} | {pad_string(div_inc_str, 12)} | {pad_string(treasury_str, 15)} | {pad_string(buyback_str, 12)}"
             print(row)
             
-        print("=====================================================================================================================================\n")
+        print("=====================================================================================================================================================================\n")
     finally:
         db.close()
 
@@ -234,9 +248,6 @@ def export_data():
     """
     5단계: 정성적 평가를 수행할 수 있도록 현재 27점 이상인 종목들을 CSV(엑셀 호환) 파일로 내보냅니다.
     """
-    import csv
-    from datetime import datetime
-    
     db = SessionLocal()
     try:
         results = db.query(ScoringResult, Company.name)\

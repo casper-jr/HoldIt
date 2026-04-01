@@ -2,8 +2,10 @@ import requests
 import zipfile
 import io
 import xml.etree.ElementTree as ET
+import datetime
 from datetime import date
 import yfinance as yf
+import pandas as pd
 from config import DART_API_KEY
 from database import SessionLocal
 from models import Company, RawFinancialData, QualitativeAssessment, FetchHistory
@@ -48,8 +50,8 @@ class DartFetcher:
 
     def get_latest_financial_summary(self, stock_code):
         """
-        특정 기업의 가장 최근 재무제표 데이터를 가져옵니다.
-        현재 연도부터 과거로 거슬러 올라가며, 3분기 -> 반기 -> 1분기 -> 전년도 사업보고서 순으로 조회합니다.
+        특정 기업의 가장 최근 재무제표 데이터를 가져옵니다. (PBR 자본총계용)
+        3분기 -> 반기 -> 1분기 -> 전년도 사업보고서 순으로 조회합니다.
         """
         if not self.corp_codes:
             self.load_corp_codes()
@@ -59,11 +61,9 @@ class DartFetcher:
             print(f"❌ 종목코드 {stock_code}를 찾을 수 없습니다.")
             return None, None, None
             
-        import datetime
         current_year = datetime.datetime.now().year
         
         # 조회할 보고서 코드 순서 (3분기, 반기, 1분기, 사업보고서)
-        # 11014: 3분기, 11012: 반기, 11013: 1분기, 11011: 사업보고서
         report_codes = ['11014', '11012', '11013', '11011']
         
         # 올해와 작년 2년치에 대해 순차적으로 시도
@@ -86,10 +86,44 @@ class DartFetcher:
                         elif reprt_code == '11012': report_name = "반기보고서"
                         elif reprt_code == '11013': report_name = "1분기보고서"
                         
-                        print(f"✅ {year}년 {report_name} 데이터 수집 성공!")
+                        print(f"✅ {year}년 {report_name} 데이터 수집 성공! (자본총계용)")
                         return data.get('list'), year, reprt_code
                         
         print(f"❌ 최근 2년 내의 재무 데이터를 찾을 수 없습니다.")
+        return None, None, None
+
+    def get_annual_financial_summary(self, stock_code):
+        """
+        특정 기업의 가장 최근 '사업보고서(1년 치 최종 실적)' 데이터를 가져옵니다. (PER 당기순이익용)
+        장기투자 관점에서 분기/반기 실적의 연환산 왜곡을 방지하기 위해 
+        항상 확정된 연간 실적(사업보고서, reprt_code: 11011)만 조회합니다.
+        """
+        corp_info = self.corp_codes.get(stock_code)
+        if not corp_info:
+            return None, None, None
+            
+        current_year = datetime.datetime.now().year
+        
+        # 조회할 보고서 코드: 사업보고서(11011) 고정
+        reprt_code = '11011'
+        
+        # 올해, 작년, 재작년 3년치에 대해 순차적으로 시도 (사업보고서는 보통 다음해 3월에 나오므로)
+        for year in [current_year, current_year - 1, current_year - 2]:
+            url = f"{self.base_url}/fnlttSinglAcnt.json"
+            params = {
+                'crtfc_key': self.api_key,
+                'corp_code': corp_info['corp_code'],
+                'bsns_year': str(year),
+                'reprt_code': reprt_code
+            }
+            
+            response = requests.get(url, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('status') == '000':
+                    print(f"✅ {year}년 사업보고서 데이터 수집 성공! (당기순이익용)")
+                    return data.get('list'), year, reprt_code
+                        
         return None, None, None
 
     def get_stock_totals(self, corp_code, year, reprt_code):
@@ -128,7 +162,6 @@ class DartFetcher:
         현재 시점 기준으로 최근 1년 내에 자사주 매입(취득)과 소각 공시가 
         각각 1건 이상 존재하는지 확인합니다.
         """
-        import datetime
         one_year_ago = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d')
         
         has_buyback = False
@@ -194,12 +227,19 @@ class DartFetcher:
                         
                     market_data['current_price'] = float(current_price)
                     market_data['total_shares'] = float(info.get('sharesOutstanding', 0))
-                    market_data['dividend_per_share'] = float(info.get('dividendRate', 0.0))
-                    
-                    # 배당 내역 분석 (분기 배당 여부 및 연속 인상 연수)
+                    # 1주당 연간 배당금: TTM이 아닌, 지급일 기준 직전 캘린더 연도의 총 배당금을 사용합니다.
                     dividends = ticker.dividends
                     if not dividends.empty:
-                        import pandas as pd
+                        yearly_divs = dividends.groupby(dividends.index.year).sum()
+                        
+                        current_year = pd.Timestamp.now().year
+                        last_year = current_year - 1
+                        
+                        # 작년 배당금이 있으면 작년 값을, 없으면 0으로 처리
+                        if last_year in yearly_divs:
+                            market_data['dividend_per_share'] = float(yearly_divs[last_year])
+                        else:
+                            market_data['dividend_per_share'] = 0.0
                         
                         # 1. 분기 배당 여부 확인 (최근 1년 내 배당금 지급 횟수가 3회 이상이면 분기배당으로 간주)
                         one_year_ago = pd.Timestamp.now(tz=dividends.index.tz) - pd.DateOffset(days=365)
@@ -208,16 +248,6 @@ class DartFetcher:
                             market_data['quarterly_dividend'] = True
                             
                         # 2. 배당 연속 인상 연수 확인
-                        # 한국 주식은 결산 배당의 배당락일이 다음 해 1~3월로 넘어가는 경우가 많으므로,
-                        # 1~2월에 지급/배당락된 배당금은 이전 연도의 결산 배당으로 간주하여 연도를 조정합니다.
-                        def get_dividend_year(date):
-                            if date.month in [1, 2]:
-                                return date.year - 1
-                            else:
-                                return date.year
-                                
-                        div_years = dividends.index.map(get_dividend_year)
-                        yearly_divs = dividends.groupby(div_years).sum()
                         years = sorted(yearly_divs.index.tolist(), reverse=True)
                         
                         if len(years) > 1:
@@ -266,32 +296,22 @@ class DartFetcher:
                 db.commit()
                 print(f"🏢 DB에 기업 정보 추가됨: {corp_name} ({stock_code})")
 
-            data_list, year, reprt_code = self.get_latest_financial_summary(stock_code)
-            if not data_list:
+            # 최근 재무 데이터 (자본총계용 - PBR)
+            latest_data_list, latest_year, latest_reprt_code = self.get_latest_financial_summary(stock_code)
+            if not latest_data_list:
                 self._record_fetch_history(db, stock_code, today, "FAIL_NO_DATA", "최근 2년 내 재무 데이터 없음")
                 return
+                
+            # 연간 재무 데이터 (당기순이익용 - PER)
+            annual_data_list, annual_year, annual_reprt_code = self.get_annual_financial_summary(stock_code)
                 
             # 2. 재무 데이터 파싱
             net_income = 0.0
             total_equity = 0.0
             
-            for item in data_list:
+            # 자본총계 파싱 (최근 분기 데이터 기준)
+            for item in latest_data_list:
                 account_nm = item.get('account_nm', '').replace(' ', '')
-                
-                # 당기순이익 파싱
-                if '당기순이익' in account_nm or '당기순손실' in account_nm:
-                    try:
-                        amount_str = item.get('thstrm_amount', '0').replace(',', '')
-                        amount = float(amount_str)
-                        
-                        if item.get('fs_div') == 'CFS':
-                            net_income = amount
-                        elif item.get('fs_div') == 'OFS' and net_income == 0.0:
-                            net_income = amount
-                    except ValueError:
-                        pass
-                        
-                # 자본총계(순자산) 파싱 - PBR 계산용
                 if '자본총계' in account_nm:
                     try:
                         amount_str = item.get('thstrm_amount', '0').replace(',', '')
@@ -303,6 +323,22 @@ class DartFetcher:
                             total_equity = amount
                     except ValueError:
                         pass
+                        
+            # 당기순이익 파싱 (최근 사업보고서 데이터 기준)
+            if annual_data_list:
+                for item in annual_data_list:
+                    account_nm = item.get('account_nm', '').replace(' ', '')
+                    if '당기순이익' in account_nm or '당기순손실' in account_nm:
+                        try:
+                            amount_str = item.get('thstrm_amount', '0')
+                            amount = float(amount_str.replace(',', ''))
+                            
+                            if item.get('fs_div') == 'CFS':
+                                net_income = amount
+                            elif item.get('fs_div') == 'OFS' and net_income == 0.0:
+                                net_income = amount
+                        except ValueError:
+                            pass
 
             # 3. yfinance에서 현재 시장 데이터(주가, 주식수, 배당금 등) 가져오기
             market_data = self.get_market_data(stock_code)
@@ -313,8 +349,8 @@ class DartFetcher:
                 self._record_fetch_history(db, stock_code, today, "SKIP_NO_DIVIDEND", "배당금 0원")
                 return
             
-            # 3.5. DART 주식총수현황에서 자사주 정보 가져오기
-            total_issued, treasury_shares = self.get_stock_totals(corp_info['corp_code'], year, reprt_code)
+            # 3.5. DART 주식총수현황에서 자사주 정보 가져오기 (최근 분기 기준)
+            total_issued, treasury_shares = self.get_stock_totals(corp_info['corp_code'], latest_year, latest_reprt_code)
             
             # 3.6. 최근 1년 내 자사주 매입 및 소각 여부 확인
             is_buyback_cancel = self.check_buyback_and_cancel(corp_info['corp_code'])
@@ -322,13 +358,13 @@ class DartFetcher:
                 print(f"🏢 자사주 매입 및 소각 공시 확인됨")
 
             # 4. RawFinancialData 테이블에 저장
-            # 기준일자는 보고서 종류에 따라 다르게 설정
+            # 기준일자는 가장 최근 보고서(latest) 기준으로 설정
             month, day = 12, 31 # 기본 사업보고서
-            if reprt_code == '11014': month, day = 9, 30  # 3분기
-            elif reprt_code == '11012': month, day = 6, 30 # 반기
-            elif reprt_code == '11013': month, day = 3, 31 # 1분기
+            if latest_reprt_code == '11014': month, day = 9, 30  # 3분기
+            elif latest_reprt_code == '11012': month, day = 6, 30 # 반기
+            elif latest_reprt_code == '11013': month, day = 3, 31 # 1분기
             
-            record_date = date(year, month, day)
+            record_date = date(latest_year, month, day)
             
             # 이미 같은 날짜의 데이터가 있는지 확인
             existing_data = db.query(RawFinancialData).filter(
@@ -346,7 +382,7 @@ class DartFetcher:
                 existing_data.dividend_increase_years = market_data['dividend_increase_years']
                 existing_data.treasury_shares = treasury_shares
                 existing_data.share_buyback_cancel = is_buyback_cancel
-                print(f"🔄 기존 데이터 업데이트 완료: {corp_name} ({year}년)")
+                print(f"🔄 기존 데이터 업데이트 완료: {corp_name} (기준일: {record_date})")
             else:
                 new_data = RawFinancialData(
                     ticker=stock_code,
@@ -362,7 +398,7 @@ class DartFetcher:
                     share_buyback_cancel=is_buyback_cancel
                 )
                 db.add(new_data)
-                print(f"💾 새 데이터 DB 저장 완료: {corp_name} ({year}년, 당기순이익: {net_income:,.0f}원, 자본총계: {total_equity:,.0f}원)")
+                print(f"💾 새 데이터 DB 저장 완료: {corp_name} (기준일: {record_date}, 당기순이익: {net_income:,.0f}원, 자본총계: {total_equity:,.0f}원)")
                 
             # 성공 이력 기록
             self._record_fetch_history(db, stock_code, today, "SUCCESS", "정상 수집 완료")

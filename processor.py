@@ -34,8 +34,10 @@ class FinancialProcessor:
         treasury_share_ratio = 0.0
         
         # 1. EPS (주당순이익) = 당기순이익 / 유통주식수
+        # DART API에서 항상 사업보고서(1년 치 최종 실적)를 가져오도록 수정되었으므로,
+        # 별도의 연환산 없이 그대로 사용합니다.
         if raw_data.total_shares and raw_data.total_shares > 0:
-            eps = raw_data.net_income / raw_data.total_shares
+            eps = float(raw_data.net_income) / raw_data.total_shares
             
         # 2. PER (주가수익비율) = 현재주가 / EPS
         if eps > 0 and raw_data.current_price:

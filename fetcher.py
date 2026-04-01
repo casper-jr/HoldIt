@@ -30,6 +30,53 @@ def _krx_yearly_dividend_totals(dividends: pd.Series) -> pd.Series:
     return dividends.groupby(labels).sum()
 
 
+def _dart_share_qty(raw) -> float:
+    """주식총수현황 API 수량 필드 파싱 ('-', 빈칸, 콤마 처리)."""
+    if raw is None:
+        return 0.0
+    s = str(raw).strip().replace(",", "")
+    if s in ("", "-", "—"):
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _parse_stock_totqy_list(items: list) -> tuple[float, float] | None:
+    """
+    stockTotqySttus 응답 list에서 보통주 발행총수·자기주식수를 추출합니다.
+    분기 공시에 보통주 행이 없고 합계만 있는 경우 합계 행을 사용합니다.
+    """
+    if not items:
+        return None
+    ordinary_rows: list[tuple[float, float]] = []
+    total_row = None
+    for item in items:
+        se = (item.get("se") or "").strip().replace(" ", "")
+        if not se or "비고" in se:
+            continue
+        if se == "합계":
+            total_row = item
+            continue
+        if "우선" in se:
+            continue
+        if "보통주" not in se:
+            continue
+        istc = _dart_share_qty(item.get("istc_totqy"))
+        if istc <= 0:
+            continue
+        tesstk = _dart_share_qty(item.get("tesstk_co"))
+        ordinary_rows.append((istc, tesstk))
+    if ordinary_rows:
+        return (sum(r[0] for r in ordinary_rows), sum(r[1] for r in ordinary_rows))
+    if total_row:
+        istc = _dart_share_qty(total_row.get("istc_totqy"))
+        if istc > 0:
+            return (istc, _dart_share_qty(total_row.get("tesstk_co")))
+    return None
+
+
 class DartFetcher:
     def __init__(self):
         self.api_key = DART_API_KEY
@@ -146,36 +193,52 @@ class DartFetcher:
                         
         return None, None, None
 
-    def get_stock_totals(self, corp_code, year, reprt_code):
-        """
-        DART API의 '주식총수현황'을 조회하여 발행주식총수와 자기주식수(자사주)를 가져옵니다.
-        """
+    def _stock_totals_one_report(self, corp_code, year, reprt_code):
+        """단일 (사업연도, 보고서코드)에 대한 주식총수현황 조회. 파싱 불가 시 None."""
         url = f"{self.base_url}/stockTotqySttus.json"
         params = {
-            'crtfc_key': self.api_key,
-            'corp_code': corp_code,
-            'bsns_year': str(year),
-            'reprt_code': reprt_code
+            "crtfc_key": self.api_key,
+            "corp_code": corp_code,
+            "bsns_year": str(year),
+            "reprt_code": reprt_code,
         }
-        
-        response = requests.get(url, params=params)
-        total_issued = 0.0
-        treasury_shares = 0.0
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status') == '000':
-                for item in data.get('list', []):
-                    # 보통주 기준으로 합산
-                    if item.get('se') == '보통주':
-                        try:
-                            # istc_totqy: 발행주식총수, tesstk_co: 자기주식수
-                            total_issued += float(item.get('istc_totqy', '0').replace(',', ''))
-                            treasury_shares += float(item.get('tesstk_co', '0').replace(',', ''))
-                        except ValueError:
-                            pass
-                            
-        return total_issued, treasury_shares
+        response = requests.get(url, params=params, timeout=30)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if data.get("status") != "000":
+            return None
+        return _parse_stock_totqy_list(data.get("list", []))
+
+    def get_stock_totals(self, corp_code, year, reprt_code):
+        """
+        DART API '주식총수현황(stockTotqySttus)'으로 발행주식총수(istc_totqy)·자기주식(tesstk_co)을 가져옵니다.
+        최신 분기 보고서에는 보통주 행이 비어 있는 경우가 많아, 동일·전년 사업보고서·반기 등으로 순차 폴백합니다.
+        (주식 소유 현황 hyslrSttus는 최대주주 위주라 자기주식 수가 별도 행으로 없는 경우가 많음)
+        """
+        seen = set()
+        candidates: list[tuple[int, str]] = []
+        for y, rc in (
+            (year, reprt_code),
+            (year, "11011"),
+            (year - 1, "11011"),
+            (year, "11012"),
+            (year - 1, "11012"),
+            (year, "11014"),
+            (year, "11013"),
+            (year - 1, "11014"),
+            (year - 1, "11013"),
+        ):
+            key = (y, rc)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(key)
+        for y, rc in candidates:
+            parsed = self._stock_totals_one_report(corp_code, y, rc)
+            if parsed is not None:
+                return parsed[0], parsed[1]
+        return 0.0, 0.0
 
     def check_buyback_and_cancel(self, corp_code):
         """

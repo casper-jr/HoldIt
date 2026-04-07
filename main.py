@@ -1,4 +1,5 @@
 import sys
+import signal
 import unicodedata
 import csv
 import time
@@ -7,7 +8,19 @@ import urllib.request
 from datetime import date, datetime
 import FinanceDataReader as fdr
 
-from fetcher import DartFetcher
+from fetcher import DartFetcher, USFetcher
+
+# Ctrl+C graceful shutdown을 위한 플래그
+_interrupted = False
+
+def _handle_sigint(sig, frame):
+    """첫 번째 Ctrl+C: 현재 종목 처리 후 중단, 두 번째: 즉시 중단"""
+    global _interrupted
+    if _interrupted:
+        raise KeyboardInterrupt
+    _interrupted = True
+    print("\n\n중단 요청됨. 현재 종목 처리 후 중단합니다... (한번 더 누르면 즉시 중단)")
+from sqlalchemy import func as sa_func
 from processor import FinancialProcessor
 from scorer import StockScorer
 from database import SessionLocal
@@ -20,14 +33,14 @@ def fetch_data(limit=None):
     """
     print(f"\n========================================")
     limit_text = "전체" if limit is None else f"{limit}개"
-    print(f"📥 [1단계: 수집] {limit_text} 종목 원본 데이터 수집 시작")
+    print(f"[1단계: 수집] {limit_text} 종목 원본 데이터 수집 시작")
     print(f"========================================\n")
     
     # macOS 등에서 SSL 인증서 에러 방지용
     ssl._create_default_https_context = ssl._create_unverified_context
     
     # 한국 거래소(KRX) 상장 종목 가져오기 (상장폐지된 종목 제외)
-    print("📈 한국거래소(KRX) 활성 상장 종목 목록을 불러옵니다...")
+    print("한국거래소(KRX) 활성 상장 종목 목록을 불러옵니다...")
     krx_df = fdr.StockListing('KRX')
     
     # 시가총액(Marcap) 기준으로 내림차순 정렬하여 큰 기업부터 가져오도록 설정
@@ -63,25 +76,135 @@ def fetch_data(limit=None):
         print("오늘은 더 이상 수집할 종목이 없습니다. (모두 이미 수집 시도함)")
         return
         
+    global _interrupted
+    _interrupted = False
+    original_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _handle_sigint)
+
     success_count = 0
-    for i, ticker in enumerate(target_tickers):
-        print(f"\n--- [{i+1}/{total_count}] 종목코드: {ticker} ---")
-        try:
-            fetcher.save_to_db(ticker)
-            success_count += 1
-            # API 호출 제한(Rate Limit) 방지를 위해 약간의 대기 시간 추가
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"❌ {ticker} 처리 중 에러 발생: {e}")
-            
-    print(f"\n✅ 수집 완료! (성공: {success_count}/{total_count})")
+    try:
+        for i, ticker in enumerate(target_tickers):
+            if _interrupted:
+                break
+            print(f"\n--- [{i+1}/{total_count}] 종목코드: {ticker} ---")
+            try:
+                fetcher.save_to_db(ticker)
+                success_count += 1
+                time.sleep(0.5)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"{ticker} 처리 중 에러 발생: {e}")
+    finally:
+        signal.signal(signal.SIGINT, original_handler)
+
+    if _interrupted:
+        print(f"\n사용자에 의해 수집이 중단되었습니다. (수집 완료: {success_count}개)")
+    else:
+        print(f"\n수집 완료! (성공: {success_count}/{total_count})")
+
+def fetch_us_data(limit=None):
+    """
+    1단계 (US): yfinance에서 미국 주식 원본 데이터를 수집하여 DB(RawFinancialData)에 저장합니다.
+    yfinance screener로 미국 증시(NYSE, NASDAQ) 전체를 시가총액 순으로 가져옵니다.
+    """
+    print(f"\n========================================")
+    limit_text = "전체" if limit is None else f"{limit}개"
+    print(f"[1단계: 수집] 미국 증시 시가총액 상위 {limit_text} 종목 원본 데이터 수집 시작")
+    print(f"========================================\n")
+
+    ssl._create_default_https_context = ssl._create_unverified_context
+
+    # yfinance screener로 미국 증시 종목을 시가총액 순으로 가져오기
+    print("미국 증시 종목 목록을 불러옵니다 (시가총액 순)...")
+    try:
+        import yfinance as yf
+
+        query = yf.EquityQuery('AND', [
+            yf.EquityQuery('OR', [
+                yf.EquityQuery('eq', ['exchange', 'NMS']),
+                yf.EquityQuery('eq', ['exchange', 'NYQ'])
+            ]),
+            yf.EquityQuery('gt', ['intradaymarketcap', 0])
+        ])
+
+        # 필요한 만큼만 페이지를 가져옴 (페이지당 250개)
+        fetch_count = limit if limit is not None else 500
+        all_tickers = []
+        for offset in range(0, fetch_count, 250):
+            size = min(250, fetch_count - offset)
+            result = yf.screen(query, sortField='intradaymarketcap', sortAsc=False, size=size, offset=offset)
+            quotes = result.get('quotes', [])
+            for q in quotes:
+                all_tickers.append(q.get('symbol', ''))
+            if len(quotes) < size:
+                break  # 더 이상 결과가 없으면 중단
+
+        total_available = result.get('total', '?')
+        print(f"미국 증시 종목 {len(all_tickers)}개 로드 완료 (시가총액 순, 전체 약 {total_available}개)")
+        if len(all_tickers) >= 3:
+            print(f"   상위: {all_tickers[0]}, {all_tickers[1]}, {all_tickers[2]}...")
+
+    except Exception as e:
+        print(f"미국 증시 종목 목록 로드 실패: {e}")
+        return
+
+    fetcher = USFetcher()
+
+    db = SessionLocal()
+    today = date.today()
+
+    # 오늘 이미 수집 시도한 종목 제외
+    fetched_today = [
+        h.ticker for h in db.query(FetchHistory.ticker)
+        .filter(FetchHistory.fetch_date == today).all()
+    ]
+    db.close()
+
+    target_tickers = [t for t in all_tickers if t not in fetched_today]
+
+    if limit is not None:
+        target_tickers = target_tickers[:limit]
+
+    total_count = len(target_tickers)
+    if total_count == 0:
+        print("오늘은 더 이상 수집할 종목이 없습니다. (모두 이미 수집 시도함)")
+        return
+
+    global _interrupted
+    _interrupted = False
+    original_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _handle_sigint)
+
+    success_count = 0
+    try:
+        for i, ticker in enumerate(target_tickers):
+            if _interrupted:
+                break
+            print(f"\n--- [{i+1}/{total_count}] {ticker} ---")
+            try:
+                fetcher.save_to_db(ticker)
+                success_count += 1
+                time.sleep(0.5)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"{ticker} 처리 중 에러 발생: {e}")
+    finally:
+        signal.signal(signal.SIGINT, original_handler)
+
+    if _interrupted:
+        print(f"\n사용자에 의해 수집이 중단되었습니다. (수집 완료: {success_count}개)")
+    else:
+        print(f"\n수집 완료! (성공: {success_count}/{total_count})")
+
 
 def process_data():
     """
     2단계: DB에 저장된 원본 데이터를 바탕으로 가공 지표(EPS, PER 등)를 계산하여 DB(ProcessedFinancialData)에 저장합니다.
     """
     print(f"\n========================================")
-    print(f"⚙️ [2단계: 가공] 원본 데이터를 평가 지표로 가공 시작")
+    print(f"[2단계: 가공] 원본 데이터를 평가 지표로 가공 시작")
     print(f"========================================\n")
     
     processor = FinancialProcessor()
@@ -92,7 +215,7 @@ def score_data():
     3단계: 가공된 지표를 바탕으로 점수와 등급을 계산하여 DB(ScoringResult)에 저장합니다.
     """
     print(f"\n========================================")
-    print(f"🧮 [3단계: 평가] 가공 지표를 바탕으로 점수 산정 시작")
+    print(f"[3단계: 평가] 가공 지표를 바탕으로 점수 산정 시작")
     print(f"========================================\n")
     
     scorer = StockScorer()
@@ -131,18 +254,25 @@ def show_leaderboard(limit=50):
     db = SessionLocal()
     # 정성 평가 총점인 43점을 모두 획득했을 때의 점수 기준 필터링(이후 필요시 ScoringResult.total_score >= 의 값 수정하여 사용)
     try:
+        # 종목당 가장 최근 평가 결과만 가져오기 위한 서브쿼리
+        latest_score = db.query(
+            ScoringResult.ticker,
+            sa_func.max(ScoringResult.score_date).label('max_date')
+        ).group_by(ScoringResult.ticker).subquery()
+
         results = db.query(ScoringResult, Company.name)\
-            .join(Company, ScoringResult.ticker == Company.ticker) \
+            .join(Company, ScoringResult.ticker == Company.ticker)\
+            .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
             .filter(ScoringResult.total_score >= 27)\
             .order_by(ScoringResult.total_score.desc(), ScoringResult.grade.asc())\
             .limit(limit).all()
 
         if not results:
-            print("❌ 표시할 평가 결과가 없습니다. (27점 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
+            print("표시할 평가 결과가 없습니다. (27점 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
             return
 
         print(f"\n=====================================================================================================================================================================")
-        print(f"🏆 우량주 평가 리더보드 (Top {limit}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
+        print(f"우량주 평가 리더보드 (Top {limit}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
         print(f"=====================================================================================================================================================================")
         
         # 헤더 출력
@@ -195,7 +325,7 @@ def show_results(ticker):
     try:
         company = db.query(Company).filter(Company.ticker == ticker).first()
         if not company:
-            print(f"❌ DB에서 종목코드 {ticker}를 찾을 수 없습니다.")
+            print(f"DB에서 종목코드 {ticker}를 찾을 수 없습니다.")
             return
 
         raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == ticker).order_by(RawFinancialData.record_date.desc()).first()
@@ -203,27 +333,32 @@ def show_results(ticker):
         score = db.query(ScoringResult).filter(ScoringResult.ticker == ticker).order_by(ScoringResult.score_date.desc()).first()
 
         if not (raw and processed and score):
-            print("❌ 평가 결과 데이터가 충분하지 않습니다. 수집/가공/평가 단계를 모두 거쳤는지 확인해 주세요.")
+            print("평가 결과 데이터가 충분하지 않습니다. 수집/가공/평가 단계를 모두 거쳤는지 확인해 주세요.")
             return
+
+        # 시장에 따른 통화 단위 결정
+        is_us = company.market and company.market.upper() not in ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
+        currency = '$' if is_us else '원'
+        price_fmt = lambda v: f"${v:,.2f}" if is_us else f"{v:,.0f} 원"
 
         print(f"========================================")
         print(f"📊 [{company.name} ({ticker})] 평가 결과 보고서")
-        print(f"   기준일자: {raw.record_date} / 평가일자: {score.score_date}")
+        print(f"   시장: {company.market} / 기준일자: {raw.record_date} / 평가일자: {score.score_date}")
         print(f"========================================\n")
 
         print("1️⃣ [수집된 원본 데이터 (Raw Data)]")
-        print(f"  - 현재 주가: {raw.current_price:,.0f} 원")
-        print(f"  - 당기순이익: {raw.net_income:,.0f} 원")
-        print(f"  - 자본총계(순자산): {raw.total_equity:,.0f} 원")
+        print(f"  - 현재 주가: {price_fmt(raw.current_price)}")
+        print(f"  - 당기순이익: {price_fmt(raw.net_income)}")
+        print(f"  - 자본총계(순자산): {price_fmt(raw.total_equity)}")
         print(f"  - 총 유통주식수: {raw.total_shares:,.0f} 주 (자사주 제외)")
         print(f"  - 자기주식수(자사주): {raw.treasury_shares:,.0f} 주")
-        print(f"  - 1주당 연간 배당금: {raw.dividend_per_share:,.0f} 원")
+        print(f"  - 1주당 연간 배당금: {price_fmt(raw.dividend_per_share)}")
         print(f"  - 분기 배당 실시: {'예' if raw.quarterly_dividend else '아니오'}")
         print(f"  - 배당 연속 인상: {raw.dividend_increase_years} 년")
         print(f"  - 정기적 자사주 매입 및 소각: {'예' if raw.share_buyback_cancel else '아니오'}\n")
 
         print("2️⃣ [가공된 평가 지표 (Processed Data)]")
-        print(f"  - EPS (주당순이익): {processed.eps:,.0f} 원 (당기순이익 / 유통주식수)")
+        print(f"  - EPS (주당순이익): {price_fmt(processed.eps)} (당기순이익 / 유통주식수)")
         print(f"  - PER (주가수익비율): {processed.per:.2f} 배 (현재주가 / EPS)")
         print(f"  - PBR (주가순자산비율): {processed.pbr:.2f} 배 (현재주가 / BPS)")
         print(f"  - 배당수익률: {processed.dividend_yield:.2f} % (주당배당금 / 현재주가 * 100)")
@@ -250,14 +385,21 @@ def export_data():
     """
     db = SessionLocal()
     try:
+        # 종목당 가장 최근 평가 결과만 가져오기
+        latest_score = db.query(
+            ScoringResult.ticker,
+            sa_func.max(ScoringResult.score_date).label('max_date')
+        ).group_by(ScoringResult.ticker).subquery()
+
         results = db.query(ScoringResult, Company.name)\
             .join(Company, ScoringResult.ticker == Company.ticker)\
+            .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
             .filter(ScoringResult.total_score >= 27)\
             .order_by(ScoringResult.total_score.desc())\
             .all()
 
         if not results:
-            print("❌ 내보낼 데이터가 없습니다. (27점 이상인 종목이 없습니다.)")
+            print("내보낼 데이터가 없습니다. (27점 이상인 종목이 없습니다.)")
             return
 
         filename = f"holdit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -288,7 +430,7 @@ def export_data():
                 writer.writerow(row)
                 
         print(f"\n========================================")
-        print(f"✅ 데이터 내보내기 완료: {filename}")
+        print(f"데이터 내보내기 완료: {filename}")
         print(f"   - 총 {len(results)}개 종목 (정량점수 27점 이상)")
         print(f"   - 엑셀에서 파일을 열어 E열~J열에 정성적 평가 점수를 기입하시면,")
         print(f"   - K열(최종_예상점수)에 총점이 자동으로 계산됩니다!")
@@ -302,9 +444,18 @@ if __name__ == "__main__":
         command = sys.argv[1]
         
         if command == "fetch":
-            arg = sys.argv[2] if len(sys.argv) > 2 else "10"
+            if len(sys.argv) < 3:
+                print("사용법: python3 main.py fetch <kr|us> <개수|all>")
+                sys.exit(1)
+            market = sys.argv[2].lower()
+            arg = sys.argv[3] if len(sys.argv) > 3 else "10"
             limit = None if arg.lower() == "all" else int(arg)
-            fetch_data(limit)
+            if market == "kr":
+                fetch_data(limit)
+            elif market == "us":
+                fetch_us_data(limit)
+            else:
+                print("시장 구분은 'kr' 또는 'us'를 입력해주세요.")
             
         elif command == "process":
             process_data()
@@ -324,12 +475,13 @@ if __name__ == "__main__":
             export_data()
             
         else:
-            print("❌ 알 수 없는 명령어입니다.")
+            print("알 수 없는 명령어입니다.")
     else:
         print("사용법:")
-        print("  python3 main.py fetch <개수|all> : [1단계] DART/yfinance에서 원본 데이터 수집 (예: fetch 100, fetch all)")
-        print("  python3 main.py process          : [2단계] DB의 원본 데이터를 바탕으로 가공 지표 계산")
-        print("  python3 main.py score            : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
-        print("  python3 main.py view <개수>      : [4단계] 전체 종목 리더보드 조회 (기본: 50개)")
-        print("  python3 main.py detail <종목>    : 특정 종목의 상세 평가 결과 조회 (예: 005930)")
-        print("  python3 main.py export           : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (27점 이상 종목)")
+        print("  python3 main.py fetch kr <개수|all> : [1단계] 한국 주식 원본 데이터 수집 (예: fetch kr 100, fetch kr all)")
+        print("  python3 main.py fetch us <개수|all> : [1단계] 미국 주식 원본 데이터 수집 - 시가총액 순 (예: fetch us 50)")
+        print("  python3 main.py process             : [2단계] DB의 원본 데이터를 바탕으로 가공 지표 계산")
+        print("  python3 main.py score               : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
+        print("  python3 main.py view <개수>         : [4단계] 전체 종목 리더보드 조회 (기본값 : 50개)")
+        print("  python3 main.py detail <종목>       : 특정 종목의 상세 평가 결과 조회 (예: 005930, KO)")
+        print("  python3 main.py export              : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (정량 평가 27점 이상 종목)")

@@ -77,6 +77,35 @@ def _parse_stock_totqy_list(items: list) -> tuple[float, float] | None:
     return None
 
 
+def record_fetch_history(db, ticker, fetch_date, status, message):
+    """수집 이력을 FetchHistory 테이블에 기록합니다. (KR/US 공통)"""
+    try:
+        # Company가 없으면 FK 제약 위반이 발생하므로, 존재 여부 확인 후 기록
+        company = db.query(Company).filter(Company.ticker == ticker).first()
+        if not company:
+            return
+
+        history = db.query(FetchHistory).filter(
+            FetchHistory.ticker == ticker,
+            FetchHistory.fetch_date == fetch_date
+        ).first()
+
+        if history:
+            history.status = status
+            history.message = message
+        else:
+            new_history = FetchHistory(
+                ticker=ticker,
+                fetch_date=fetch_date,
+                status=status,
+                message=message
+            )
+            db.add(new_history)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 class DartFetcher:
     def __init__(self):
         self.api_key = DART_API_KEY
@@ -384,7 +413,7 @@ class DartFetcher:
             # 최근 재무 데이터 (자본총계용 - PBR)
             latest_data_list, latest_year, latest_reprt_code = self.get_latest_financial_summary(stock_code)
             if not latest_data_list:
-                self._record_fetch_history(db, stock_code, today, "FAIL_NO_DATA", "최근 2년 내 재무 데이터 없음")
+                record_fetch_history(db, stock_code, today, "FAIL_NO_DATA", "최근 2년 내 재무 데이터 없음")
                 return
                 
             # 연간 재무 데이터 (당기순이익용 - PER)
@@ -431,7 +460,7 @@ class DartFetcher:
             # 배당금이 0원인 종목은 평가 대상에서 제외
             if market_data.get('dividend_per_share', 0.0) <= 0:
                 print(f"⏭️ 최근 1년간 배당금 지급 내역이 없어 제외합니다: {corp_name} ({stock_code})")
-                self._record_fetch_history(db, stock_code, today, "SKIP_NO_DIVIDEND", "배당금 0원")
+                record_fetch_history(db, stock_code, today, "SKIP_NO_DIVIDEND", "배당금 0원")
                 return
             
             # 3.5. DART 주식총수현황에서 자사주 정보 가져오기 (최근 분기 기준)
@@ -486,41 +515,253 @@ class DartFetcher:
                 print(f"💾 새 데이터 DB 저장 완료: {corp_name} (기준일: {record_date}, 당기순이익: {net_income:,.0f}원, 자본총계: {total_equity:,.0f}원)")
                 
             # 성공 이력 기록
-            self._record_fetch_history(db, stock_code, today, "SUCCESS", "정상 수집 완료")
+            record_fetch_history(db, stock_code, today, "SUCCESS", "정상 수집 완료")
             db.commit()
             
         except Exception as e:
             db.rollback()
             print(f"❌ DB 저장 중 에러 발생: {e}")
-            self._record_fetch_history(db, stock_code, today, "ERROR", str(e))
+            record_fetch_history(db, stock_code, today, "ERROR", str(e))
         finally:
             db.close()
 
-    def _record_fetch_history(self, db, stock_code, fetch_date, status, message):
-        """수집 이력을 FetchHistory 테이블에 기록합니다."""
-        history = db.query(FetchHistory).filter(
-            FetchHistory.ticker == stock_code,
-            FetchHistory.fetch_date == fetch_date
-        ).first()
-        
-        if history:
-            history.status = status
-            history.message = message
-        else:
-            new_history = FetchHistory(
-                ticker=stock_code,
-                fetch_date=fetch_date,
-                status=status,
-                message=message
+class USFetcher:
+    """미국 주식 데이터 수집 - yfinance만으로 모든 데이터 확보"""
+
+    def get_financial_data(self, ticker):
+        """
+        yfinance에서 재무제표 데이터(당기순이익, 자본총계, 자사주)를 가져옵니다.
+        가장 최근 연간 재무제표(Annual) 기준입니다.
+        """
+        result = {
+            'net_income': 0.0,
+            'total_equity': 0.0,
+            'treasury_shares': 0.0,
+            'record_date': None
+        }
+
+        try:
+            stock = yf.Ticker(ticker)
+
+            # Income Statement - 당기순이익
+            income_stmt = stock.income_stmt
+            if income_stmt is not None and not income_stmt.empty:
+                if 'Net Income' in income_stmt.index:
+                    val = income_stmt.loc['Net Income'].iloc[0]
+                    if pd.notna(val):
+                        result['net_income'] = float(val)
+                result['record_date'] = income_stmt.columns[0].date()
+
+            # Balance Sheet - 자본총계, 자사주
+            balance = stock.balance_sheet
+            if balance is not None and not balance.empty:
+                if 'Stockholders Equity' in balance.index:
+                    val = balance.loc['Stockholders Equity'].iloc[0]
+                    if pd.notna(val):
+                        result['total_equity'] = float(val)
+
+                if 'Treasury Shares Number' in balance.index:
+                    val = balance.loc['Treasury Shares Number'].iloc[0]
+                    if pd.notna(val):
+                        result['treasury_shares'] = abs(float(val))
+
+                if result['record_date'] is None:
+                    result['record_date'] = balance.columns[0].date()
+
+            if result['record_date']:
+                print(f"✅ {ticker} 재무제표 수집 성공 (기준일: {result['record_date']})")
+            else:
+                print(f"⚠️ {ticker} 재무제표 데이터를 찾을 수 없습니다.")
+
+        except Exception as e:
+            print(f"❌ {ticker} 재무제표 수집 실패: {e}")
+
+        return result
+
+    def get_market_data(self, ticker):
+        """
+        yfinance에서 주가, 주식수, 배당 정보를 가져옵니다.
+        미국 주식은 캘린더 연도 기준으로 배당금을 집계합니다 (KRX 보정 없음).
+        """
+        market_data = {
+            'current_price': 0.0,
+            'total_shares': 0.0,
+            'dividend_per_share': 0.0,
+            'quarterly_dividend': False,
+            'dividend_increase_years': 0
+        }
+
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+
+            if not info:
+                return market_data
+
+            market_data['current_price'] = float(
+                info.get('currentPrice', info.get('previousClose', 0))
             )
-            db.add(new_history)
-        db.commit()
+            market_data['total_shares'] = float(info.get('sharesOutstanding', 0))
+
+            dividends = stock.dividends
+            if not dividends.empty:
+                current_year = pd.Timestamp.now().year
+                last_year = current_year - 1
+
+                # 캘린더 연도별 배당금 합계 (KRX 보정 없이 그대로)
+                yearly_divs = dividends.groupby(dividends.index.year).sum()
+
+                # 작년도 연간 총 배당금
+                if last_year in yearly_divs.index:
+                    market_data['dividend_per_share'] = float(yearly_divs[last_year])
+
+                # 분기 배당 여부 (최근 1년 내 3회 이상 지급)
+                one_year_ago = pd.Timestamp.now(tz=dividends.index.tz) - pd.DateOffset(days=365)
+                recent_divs = dividends[dividends.index >= one_year_ago]
+                if len(recent_divs) >= 3:
+                    market_data['quarterly_dividend'] = True
+
+                # 배당 연속 인상 연수 (캘린더 연도 기준)
+                if last_year in yearly_divs.index:
+                    y = int(last_year)
+                    streak = 0
+                    while True:
+                        prev_y = y - 1
+                        if prev_y not in yearly_divs.index:
+                            break
+                        if float(yearly_divs[y]) > float(yearly_divs[prev_y]):
+                            streak += 1
+                            y = prev_y
+                        else:
+                            break
+                    market_data['dividend_increase_years'] = streak
+
+            print(f"📈 yfinance 데이터 수집 성공 ({ticker}): 현재가 ${market_data['current_price']:,.2f}")
+            print(f"   └─ 분기배당: {market_data['quarterly_dividend']} | 연속인상: {market_data['dividend_increase_years']}년")
+
+        except Exception as e:
+            print(f"⚠️ {ticker} 시장 데이터 수집 실패: {e}")
+
+        return market_data
+
+    def check_buyback(self, ticker):
+        """
+        yfinance 현금흐름표에서 자사주 매입(Repurchase) 여부를 확인합니다.
+        미국에서는 자사주 매입 시 대부분 소각(retire)하므로 매입 = 소각으로 간주합니다.
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            cashflow = stock.cashflow
+            if cashflow is None or cashflow.empty:
+                return False
+
+            buyback_keys = ['Repurchase Of Capital Stock', 'Common Stock Repurchased']
+            for key in buyback_keys:
+                if key in cashflow.index:
+                    val = cashflow.loc[key].iloc[0]
+                    if pd.notna(val) and float(val) < 0:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def save_to_db(self, ticker):
+        """
+        미국 주식 데이터를 수집하여 DB에 저장합니다.
+        yfinance만으로 재무제표 + 시장 데이터 + 자사주 정보를 모두 확보합니다.
+        """
+        db = SessionLocal()
+        today = date.today()
+
+        try:
+            # 1. Company 등록 (fetch_history FK 제약을 위해 가장 먼저 수행)
+            stock_obj = yf.Ticker(ticker)
+            company_name = stock_obj.info.get('shortName', ticker)
+            exchange = stock_obj.info.get('exchange', 'US')
+
+            company = db.query(Company).filter(Company.ticker == ticker).first()
+            if not company:
+                company = Company(ticker=ticker, name=company_name, market=exchange)
+                db.add(company)
+                db.commit()
+                print(f"🏢 DB에 기업 정보 추가됨: {company_name} ({ticker})")
+
+            # 2. 재무제표 데이터 수집 (당기순이익, 자본총계, 자사주)
+            financial = self.get_financial_data(ticker)
+            if not financial['record_date']:
+                record_fetch_history(db, ticker, today, "FAIL_NO_DATA", "재무제표 데이터 없음")
+                return
+
+            # 3. 시장 데이터 수집 (주가, 주식수, 배당)
+            market_data = self.get_market_data(ticker)
+
+            if market_data['current_price'] <= 0:
+                record_fetch_history(db, ticker, today, "FAIL_NO_DATA", "주가 데이터 없음")
+                return
+
+            # 배당금 없는 종목 제외
+            if market_data['dividend_per_share'] <= 0:
+                print(f"⏭️ 배당금 없어 제외: {company_name} ({ticker})")
+                record_fetch_history(db, ticker, today, "SKIP_NO_DIVIDEND", "배당금 0")
+                return
+
+            # 4. 자사주 매입/소각 여부
+            is_buyback = self.check_buyback(ticker)
+            if is_buyback:
+                print(f"🏢 자사주 매입(Buyback) 확인됨: {ticker}")
+
+            # 5. RawFinancialData 저장
+            record_date = financial['record_date']
+
+            existing = db.query(RawFinancialData).filter(
+                RawFinancialData.ticker == ticker,
+                RawFinancialData.record_date == record_date
+            ).first()
+
+            if existing:
+                existing.net_income = financial['net_income']
+                existing.total_equity = financial['total_equity']
+                existing.current_price = market_data['current_price']
+                existing.total_shares = market_data['total_shares']
+                existing.dividend_per_share = market_data['dividend_per_share']
+                existing.quarterly_dividend = market_data['quarterly_dividend']
+                existing.dividend_increase_years = market_data['dividend_increase_years']
+                existing.treasury_shares = financial['treasury_shares']
+                existing.share_buyback_cancel = is_buyback
+                print(f"🔄 기존 데이터 업데이트: {company_name} ({ticker}, 기준일: {record_date})")
+            else:
+                new_data = RawFinancialData(
+                    ticker=ticker,
+                    record_date=record_date,
+                    net_income=financial['net_income'],
+                    total_equity=financial['total_equity'],
+                    current_price=market_data['current_price'],
+                    total_shares=market_data['total_shares'],
+                    dividend_per_share=market_data['dividend_per_share'],
+                    quarterly_dividend=market_data['quarterly_dividend'],
+                    dividend_increase_years=market_data['dividend_increase_years'],
+                    treasury_shares=financial['treasury_shares'],
+                    share_buyback_cancel=is_buyback
+                )
+                db.add(new_data)
+                print(f"💾 새 데이터 저장: {company_name} ({ticker}, 기준일: {record_date})")
+
+            record_fetch_history(db, ticker, today, "SUCCESS", "정상 수집 완료")
+            db.commit()
+
+        except Exception as e:
+            db.rollback()
+            print(f"❌ {ticker} 처리 중 에러: {e}")
+            record_fetch_history(db, ticker, today, "ERROR", str(e))
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
-    fetcher = DartFetcher()
-    
-    # 테스트: 삼성전자(005930) 가장 최근 재무 데이터 수집 및 DB 저장
-    target_ticker = '005930'
-    
-    print(f"\n🚀 삼성전자({target_ticker}) 가장 최근 재무 데이터 수집 및 DB 저장 시작...")
-    fetcher.save_to_db(target_ticker)
+    # 테스트: 한국 주식
+    # fetcher = DartFetcher()
+    # fetcher.save_to_db('005930')
+
+    # 테스트: 미국 주식
+    us_fetcher = USFetcher()
+    us_fetcher.save_to_db('AAPL')

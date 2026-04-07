@@ -6,7 +6,7 @@ def reset_database():
     데이터베이스의 모든 데이터를 삭제(초기화)합니다.
     외래키(Foreign Key) 제약조건을 피하기 위해 자식 테이블부터 순서대로 삭제합니다.
     """
-    print("⚠️ 데이터베이스 초기화를 시작합니다...")
+    print("데이터베이스 초기화를 시작합니다...")
     
     # 사용자 확인 (실수 방지)
     confirm = input("정말로 모든 데이터를 삭제하시겠습니까? (y/n): ")
@@ -28,7 +28,7 @@ def reset_database():
         
         db.commit()
         
-        print("\n✅ DB 초기화 완료!")
+        print("\nDB 초기화 완료!")
         print(f" - 삭제된 기업(Company) 수: {deleted_comp}")
         print(f" - 삭제된 원본 데이터(Raw) 수: {deleted_raw}")
         print(f" - 삭제된 가공 데이터(Processed) 수: {deleted_proc}")
@@ -37,7 +37,7 @@ def reset_database():
         
     except Exception as e:
         db.rollback()
-        print(f"\n❌ 데이터 초기화 중 에러 발생: {e}")
+        print(f"\n데이터 초기화 중 에러 발생: {e}")
     finally:
         db.close()
 

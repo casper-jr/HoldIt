@@ -9,11 +9,11 @@ class FinancialProcessor:
         """
         DB에 저장된 모든 Raw 데이터를 읽어와서 가공 지표를 계산하고 저장합니다.
         """
-        print("⚙️ 데이터 가공을 시작합니다...")
+        print("데이터 가공을 시작합니다...")
         raw_data_list = self.db.query(RawFinancialData).all()
         
         if not raw_data_list:
-            print("⚠️ 가공할 원본 데이터(RawFinancialData)가 없습니다.")
+            print("가공할 원본 데이터(RawFinancialData)가 없습니다.")
             return
 
         for raw in raw_data_list:
@@ -21,7 +21,7 @@ class FinancialProcessor:
             
         self.db.commit()
         self.db.close()
-        print("✅ 모든 데이터 가공 및 DB 저장 완료!")
+        print("모든 데이터 가공 및 DB 저장 완료!")
 
     def process_single(self, raw_data):
         """
@@ -72,7 +72,7 @@ class FinancialProcessor:
             processed.pbr = pbr
             processed.dividend_yield = dividend_yield
             processed.treasury_share_ratio = treasury_share_ratio
-            print(f"🔄 가공 데이터 업데이트: {raw_data.ticker} ({raw_data.record_date})")
+            print(f"가공 데이터 업데이트: {raw_data.ticker} ({raw_data.record_date})")
         else:
             processed = ProcessedFinancialData(
                 ticker=raw_data.ticker,
@@ -85,7 +85,7 @@ class FinancialProcessor:
                 treasury_share_ratio=treasury_share_ratio
             )
             self.db.add(processed)
-            print(f"💾 가공 데이터 신규 저장: {raw_data.ticker} ({raw_data.record_date})")
+            print(f"가공 데이터 신규 저장: {raw_data.ticker} ({raw_data.record_date})")
             
         print(f"   └─ EPS: {eps:,.0f}원 | PER: {per:.2f}배 | PBR: {pbr:.2f}배 | 배당수익률: {dividend_yield:.2f}% | 자사주비율: {treasury_share_ratio:.2f}%")
 

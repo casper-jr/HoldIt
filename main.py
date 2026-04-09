@@ -252,10 +252,11 @@ def pad_string(s, total_width):
         return s + " " * padding
     return s
 
-def show_leaderboard(limit=100, market=None):
+def show_leaderboard(limit=None, market=None):
     """
     4단계: DB에 저장된 평가 결과를 총점 기준으로 내림차순 정렬하여 출력합니다.
     (정성평가 만점 43점을 받아도 70점(B등급) 미만인 종목은 제외합니다. 즉, 현재 점수 27점 이상만 표시)
+    limit: 출력할 최대 종목 수. None이면 임계값(27점) 이상 전체 출력.
     market: 'kr'이면 한국 종목만, 'us'이면 미국 종목만, None이면 전체
     """
     KR_MARKETS = ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
@@ -280,16 +281,19 @@ def show_leaderboard(limit=100, market=None):
         elif market == 'us':
             query = query.filter(~Company.market.in_(KR_MARKETS))
 
-        results = query.order_by(ScoringResult.total_score.desc(), ScoringResult.grade.asc())\
-            .limit(limit).all()
+        query = query.order_by(ScoringResult.total_score.desc(), ScoringResult.grade.asc())
+        if limit is not None:
+            query = query.limit(limit)
+        results = query.all()
 
         if not results:
             print("표시할 평가 결과가 없습니다. (27점 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
             return
 
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
+        limit_label = f"Top {limit}" if limit is not None else f"전체 {len(results)}개"
         print(f"\n{'=' * 160}")
-        print(f"우량주 평가 리더보드 [{market_label}] (Top {limit}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
+        print(f"우량주 평가 리더보드 [{market_label}] ({limit_label}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
         print(f"{'=' * 160}")
         
         # 헤더 출력
@@ -542,14 +546,15 @@ if __name__ == "__main__":
             score_data()
             
         elif command == "view":
-            # view / view 100 / view kr / view us / view kr 100 / view us 100
+            # view / view 50 / view kr / view us / view kr 50 / view us 50
+            # 개수를 지정하지 않으면 임계값(27점) 이상 전체 출력
             market = None
-            limit = 100
+            limit = None
             if len(sys.argv) > 2:
                 arg2 = sys.argv[2].lower()
                 if arg2 in ('kr', 'us'):
                     market = arg2
-                    limit = int(sys.argv[3]) if len(sys.argv) > 3 else 50
+                    limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
                 else:
                     limit = int(arg2)
             show_leaderboard(limit, market)
@@ -574,6 +579,6 @@ if __name__ == "__main__":
         print("  python3 main.py refetch <종목코드>   : [1단계] 특정 종목 강제 재수집 (오늘 이미 수집한 종목도 재수집, 예: refetch 316140, refetch AAPL)")
         print("  python3 main.py process             : [2단계] DB의 원본 데이터를 바탕으로 가공 지표 계산")
         print("  python3 main.py score               : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
-        print("  python3 main.py view [kr|us] <개수>  : [4단계] 리더보드 조회 (예: view, view kr, view us 100)")
+        print("  python3 main.py view [kr|us] [개수]  : [4단계] 리더보드 조회 - 개수 미지정 시 임계값 이상 전체 출력 (예: view, view kr, view us 50)")
         print("  python3 main.py detail <종목>       : 특정 종목의 상세 평가 결과 조회 (예: 005930, KO)")
         print("  python3 main.py export [kr|us]       : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (예: export, export kr, export us)")

@@ -455,7 +455,8 @@ def export_data(market=None):
                 '정량합계',
                 '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)',
                 '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)',
-                '최종_예상점수'
+                '최종_예상점수',
+                '메모'
             ]
             writer.writerow(headers)
 
@@ -489,7 +490,8 @@ def export_data(market=None):
                     buyback_val, score.score_buyback,
                     score.total_score,
                     '', '', '', '', '', '',
-                    excel_formula
+                    excel_formula,
+                    ''
                 ]
                 writer.writerow(row)
                 

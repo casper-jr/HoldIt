@@ -1,3 +1,4 @@
+import os
 import sys
 import signal
 import unicodedata
@@ -385,15 +386,18 @@ def show_results(ticker):
         print(f"  - 자사주 매입/소각 점수: {score.score_buyback} / 7 점")
         print("  --------------------------------------")
         print(f"  - 정량적 합계: {score.total_score} 점 (정성적 평가 0점 처리 중)")
-        print(f"  - 최종 투자 등급: [{score.grade}] 등급\n")
+        # print(f"  - 최종 투자 등급: [{score.grade}] 등급\n")
 
     finally:
         db.close()
 
-def export_data():
+def export_data(market=None):
     """
     5단계: 정성적 평가를 수행할 수 있도록 현재 27점 이상인 종목들을 CSV(엑셀 호환) 파일로 내보냅니다.
+    market: 'kr'이면 한국 종목만, 'us'이면 미국 종목만, None이면 전체
     """
+    KR_MARKETS = ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
+
     db = SessionLocal()
     try:
         # 종목당 가장 최근 평가 결과만 가져오기
@@ -402,47 +406,89 @@ def export_data():
             sa_func.max(ScoringResult.score_date).label('max_date')
         ).group_by(ScoringResult.ticker).subquery()
 
-        results = db.query(ScoringResult, Company.name)\
+        query = db.query(ScoringResult, Company.name)\
             .join(Company, ScoringResult.ticker == Company.ticker)\
             .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
-            .filter(ScoringResult.total_score >= 27)\
-            .order_by(ScoringResult.total_score.desc())\
-            .all()
+            .filter(ScoringResult.total_score >= 27)
+
+        # 시장 필터링
+        if market == 'kr':
+            query = query.filter(Company.market.in_(KR_MARKETS))
+        elif market == 'us':
+            query = query.filter(~Company.market.in_(KR_MARKETS))
+
+        results = query.order_by(ScoringResult.total_score.desc()).all()
 
         if not results:
             print("내보낼 데이터가 없습니다. (27점 이상인 종목이 없습니다.)")
             return
 
-        filename = f"holdit_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
+        # export 폴더 생성 (없으면)
+        export_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'export')
+        os.makedirs(export_dir, exist_ok=True)
+
+        # 동일 날짜에는 덮어쓰기 (날짜 기준 파일명, 시분초 제외)
+        market_suffix = f"_{market}" if market else ""
+        filename = os.path.join(export_dir, f"holdit_{market_suffix}_{date.today().strftime('%Y%m%d')}.csv")
+
         # utf-8-sig를 사용하여 엑셀에서 한글이 깨지지 않도록 함
         with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
-            
-            # 헤더 작성
+
+            # 헤더 작성: 정량 항목별 값+점수, 정량합계, 정성평가 빈칸, 최종점수
             headers = [
-                '순위', '종목명', '종목코드', '현재_정량점수', 
-                '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)', 
-                '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)', '최종_예상점수'
+                '순위', '종목명', '종목코드', '시장',
+                'PER', 'PER점수(/20)', 'PBR', 'PBR점수(/5)',
+                '배당수익률(%)', '배당수익률점수(/10)',
+                '분기배당', '분기배당점수(/5)',
+                '배당연속인상(년)', '배당인상점수(/5)',
+                '자사주비율(%)', '자사주비율점수(/5)',
+                '자사주매입소각', '매입소각점수(/7)',
+                '정량합계',
+                '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)',
+                '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)',
+                '최종_예상점수'
             ]
             writer.writerow(headers)
-            
+
             # 데이터 작성
             for i, (score, name) in enumerate(results, 1):
-                # 엑셀 수식: 현재 정량점수(D열) + 정성평가 항목들(E~J열) 합산
-                # 엑셀의 행은 1부터 시작하고 헤더가 1행이므로, 데이터는 2행부터 시작 (i+1)
+                raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == score.ticker).order_by(RawFinancialData.record_date.desc()).first()
+                processed = db.query(ProcessedFinancialData).filter(ProcessedFinancialData.ticker == score.ticker).order_by(ProcessedFinancialData.record_date.desc()).first()
+
+                company = db.query(Company).filter(Company.ticker == score.ticker).first()
+                market_name = company.market if company else ''
+
+                per_val = f"{processed.per:.1f}" if processed and processed.per > 0 else '-'
+                pbr_val = f"{processed.pbr:.2f}" if processed and processed.pbr > 0 else '-'
+                div_yield_val = f"{processed.dividend_yield:.1f}" if processed else '-'
+                q_div_val = 'O' if raw and raw.quarterly_dividend else 'X'
+                div_inc_val = raw.dividend_increase_years if raw else '-'
+                treasury_val = f"{processed.treasury_share_ratio:.1f}" if processed else '-'
+                buyback_val = 'O' if raw and raw.share_buyback_cancel else 'X'
+
+                # 엑셀 수식: 정량합계(S열) + 정성평가 항목들(T~Y열) 합산
                 row_num = i + 1
-                excel_formula = f"=D{row_num}+SUM(E{row_num}:J{row_num})"
-                
+                excel_formula = f"=S{row_num}+SUM(T{row_num}:Y{row_num})"
+
                 row = [
-                    i, name, score.ticker, score.total_score,
-                    '', '', '', '', '', '', excel_formula
+                    i, name, score.ticker, market_name,
+                    per_val, score.score_per, pbr_val, score.score_pbr,
+                    div_yield_val, score.score_div_yield,
+                    q_div_val, score.score_div_quarter,
+                    div_inc_val, score.score_div_inc,
+                    treasury_val, score.score_treasury_ratio,
+                    buyback_val, score.score_buyback,
+                    score.total_score,
+                    '', '', '', '', '', '',
+                    excel_formula
                 ]
                 writer.writerow(row)
                 
+        market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
         print(f"\n========================================")
         print(f"데이터 내보내기 완료: {filename}")
-        print(f"   - 총 {len(results)}개 종목 (정량점수 27점 이상)")
+        print(f"   - 대상: {market_label} / 총 {len(results)}개 종목 (정량점수 27점 이상)")
         print(f"   - 엑셀에서 파일을 열어 E열~J열에 정성적 평가 점수를 기입하시면,")
         print(f"   - K열(최종_예상점수)에 총점이 자동으로 계산됩니다!")
         print(f"========================================\n")
@@ -492,7 +538,11 @@ if __name__ == "__main__":
             show_results(target_ticker)
             
         elif command == "export":
-            export_data()
+            # export / export kr / export us
+            market = None
+            if len(sys.argv) > 2 and sys.argv[2].lower() in ('kr', 'us'):
+                market = sys.argv[2].lower()
+            export_data(market)
             
         else:
             print("알 수 없는 명령어입니다.")
@@ -504,4 +554,4 @@ if __name__ == "__main__":
         print("  python3 main.py score               : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
         print("  python3 main.py view [kr|us] <개수>  : [4단계] 리더보드 조회 (예: view, view kr, view us 100)")
         print("  python3 main.py detail <종목>       : 특정 종목의 상세 평가 결과 조회 (예: 005930, KO)")
-        print("  python3 main.py export              : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (정량 평가 27점 이상 종목)")
+        print("  python3 main.py export [kr|us]       : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (예: export, export kr, export us)")

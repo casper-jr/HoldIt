@@ -387,6 +387,78 @@ class DartFetcher:
         print(f"⚠️ yfinance에서 {stock_code}의 시장 데이터를 찾을 수 없습니다.")
         return market_data
 
+    def get_dividend_history_dart(self, stock_code):
+        """
+        DART alotMatter.json API를 사용하여 최대 12년치 배당금 이력을 가져옵니다.
+        각 호출은 당기(thstrm)/전기(frmtrm)/전전기(lwfr) 3개 연도를 반환하므로,
+        4번 호출(last_year, last_year-3, last_year-6, last_year-9)로 약 12년치를 커버합니다.
+
+        yfinance는 한국 주식 배당 이력을 3~5년치만 제공하는 경우가 많아 이를 대체합니다.
+        배당 연속 인상 점수의 만점 기준(10년 이상)을 충족하기 위해 사용됩니다.
+
+        Returns:
+            dict: {year(int): dividend_per_share(float)} — 연도별 주당 현금배당금 (보통주)
+                  데이터를 가져오지 못했거나 비배당 종목이면 빈 dict 반환.
+        """
+        corp_info = self.corp_codes.get(stock_code)
+        if not corp_info:
+            return {}
+
+        corp_code = corp_info['corp_code']
+        current_year = datetime.datetime.now().year
+        last_year = current_year - 1
+
+        yearly_divs = {}
+
+        # 4번 호출: last_year부터 3년 간격으로 총 12년치 커버
+        for base_year in [last_year, last_year - 3, last_year - 6, last_year - 9]:
+            url = f"{self.base_url}/alotMatter.json"
+            params = {
+                'crtfc_key': self.api_key,
+                'corp_code': corp_code,
+                'bsns_year': str(base_year),
+                'reprt_code': '11011'  # 사업보고서
+            }
+
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                if response.status_code != 200:
+                    continue
+                data = response.json()
+                if data.get('status') != '000':
+                    continue
+
+                items = data.get('list', [])
+                for item in items:
+                    se = (item.get('se') or '').strip()
+                    # 주당 현금배당금 행만 추출
+                    # "현금배당금총액(백만원)" 등 총액 행은 제외하고 "주당"/"1주당" 행만 허용
+                    # 우선주 제외
+                    if '주당' not in se:
+                        continue
+                    if '현금배당금' not in se:
+                        continue
+                    if '우선주' in se:
+                        continue
+
+                    # thstrm=base_year, frmtrm=base_year-1, lwfr=base_year-2
+                    for period_key, year_offset in [('thstrm', 0), ('frmtrm', -1), ('lwfr', -2)]:
+                        val_str = (item.get(period_key) or '').strip().replace(',', '')
+                        if val_str in ('', '-', '—'):
+                            continue
+                        try:
+                            val = float(val_str)
+                            year = base_year + year_offset
+                            # 이미 더 최근 호출에서 채워진 연도는 덮어쓰지 않음
+                            if year not in yearly_divs:
+                                yearly_divs[year] = val
+                        except ValueError:
+                            pass
+            except Exception:
+                continue
+
+        return yearly_divs
+
     def save_to_db(self, stock_code):
         """
         수집한 최근 데이터를 DB에 저장합니다.
@@ -456,17 +528,43 @@ class DartFetcher:
 
             # 3. yfinance에서 현재 시장 데이터(주가, 주식수, 배당금 등) 가져오기
             market_data = self.get_market_data(stock_code)
-            
+
             # 배당금이 0원인 종목은 평가 대상에서 제외
             if market_data.get('dividend_per_share', 0.0) <= 0:
                 print(f"⏭️ 최근 1년간 배당금 지급 내역이 없어 제외합니다: {corp_name} ({stock_code})")
                 record_fetch_history(db, stock_code, today, "SKIP_NO_DIVIDEND", "배당금 0원")
                 return
             
-            # 3.5. DART 주식총수현황에서 자사주 정보 가져오기 (최근 분기 기준)
+            # 3.5. DART alotMatter.json으로 배당 연속 인상 연수 재계산
+            # yfinance는 한국 주식 배당 이력을 3~5년치만 제공하는 경우가 많아,
+            # 더 긴 이력(최대 12년)을 제공하는 DART API로 대체합니다.
+            dart_div_history = self.get_dividend_history_dart(stock_code)
+            if dart_div_history:
+                current_year_dart = datetime.datetime.now().year
+                last_year_dart = current_year_dart - 1
+                # 연도별 배당금 이력 출력 (디버깅용)
+                sorted_years = sorted(dart_div_history.keys())
+                history_str = ", ".join(f"{y}:{dart_div_history[y]:,.0f}" for y in sorted_years)
+                print(f"   📋 DART 배당 이력: {history_str}")
+                if last_year_dart in dart_div_history:
+                    y = last_year_dart
+                    streak = 0
+                    while True:
+                        prev_y = y - 1
+                        if prev_y not in dart_div_history:
+                            break
+                        if dart_div_history[y] > dart_div_history[prev_y]:
+                            streak += 1
+                            y = prev_y
+                        else:
+                            break
+                    market_data['dividend_increase_years'] = streak
+                    print(f"   📊 DART 배당 이력 기반 연속 인상: {streak}년 ({len(dart_div_history)}년치 데이터 확보)")
+
+            # 3.7. DART 주식총수현황에서 자사주 정보 가져오기 (최근 분기 기준)
             total_issued, treasury_shares = self.get_stock_totals(corp_info['corp_code'], latest_year, latest_reprt_code)
-            
-            # 3.6. 최근 1년 내 자사주 매입 및 소각 여부 확인
+
+            # 3.8. 최근 1년 내 자사주 매입 및 소각 여부 확인
             is_buyback_cancel = self.check_buyback_and_cancel(corp_info['corp_code'])
             if is_buyback_cancel:
                 print(f"🏢 자사주 매입 및 소각 공시 확인됨")

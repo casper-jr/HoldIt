@@ -530,17 +530,21 @@ class USFetcher:
 
     def get_financial_data(self, ticker):
         """
-        yfinance에서 재무제표 데이터(당기순이익, 자본총계, 자사주)를 가져옵니다.
+        yfinance에서 재무제표 데이터(당기순이익, 자본총계, 자사주, 희석주식수)를 가져옵니다.
         - 당기순이익(EPS용): 가장 최근 4개 분기 합산 (TTM)
           Naver 증권의 'EPS = 지배기업귀속 최근 분기 합산 순이익 / 수정평균발행주식수' 방식과 동일.
           연간 보고서 단일 값(income_stmt)은 대규모 일회성 비용이 있는 해에 TTM과 크게 달라질 수 있음.
         - 자본총계·자사주(PBR용): 가장 최근 분기 재무제표(quarterly_balance_sheet) 기준
+        - 총 주식수(EPS·BPS 분모): quarterly_income_stmt의 'Diluted Average Shares' 우선 사용.
+          이중 주식 구조(Dual-Class)에서 info['sharesOutstanding']은 해당 클래스
+          주식수만 반환하지만, Diluted Average Shares는 전사 전체 희석주식수를 반환함.
         - record_date: 분기 balance sheet의 기준일을 사용
         """
         result = {
             'net_income': 0.0,
             'total_equity': 0.0,
             'treasury_shares': 0.0,
+            'total_shares': 0.0,   # 희석주식수 (이중 주식 구조 대응용, 0이면 sharesOutstanding 폴백)
             'record_date': None
         }
 
@@ -556,6 +560,14 @@ class USFetcher:
                     recent_4q = net_income_row.iloc[:4].dropna()
                     if not recent_4q.empty:
                         result['net_income'] = float(recent_4q.sum())
+
+                # 전사 희석주식수: info['sharesOutstanding']과 달리 이중 주식 구조에서도 전체 합산값 반환
+                for shares_key in ('Diluted Average Shares', 'Basic Average Shares'):
+                    if shares_key in q_income.index:
+                        val = q_income.loc[shares_key].iloc[0]
+                        if pd.notna(val) and float(val) > 0:
+                            result['total_shares'] = float(val)
+                            break
 
             # 자본총계·자사주: 가장 최근 분기 재무제표
             q_balance = stock.quarterly_balance_sheet
@@ -726,11 +738,18 @@ class USFetcher:
                 RawFinancialData.record_date == record_date
             ).first()
 
+            # total_shares 결정: 재무제표 희석주식수 우선, 없으면 info['sharesOutstanding'] 폴백
+            # 이중 주식 구조(MKC-V 등)에서 sharesOutstanding은 해당 클래스 주식수만 반환하므로
+            # Diluted Average Shares를 우선 사용하여 전사 기준 EPS/BPS를 올바르게 계산
+            total_shares = financial['total_shares'] if financial['total_shares'] > 0 else market_data['total_shares']
+            if financial['total_shares'] > 0 and abs(financial['total_shares'] - market_data['total_shares']) / max(market_data['total_shares'], 1) > 0.1:
+                print(f"   ℹ️ 주식수 조정: sharesOutstanding={market_data['total_shares']:,.0f} → Diluted Average Shares={financial['total_shares']:,.0f} (이중 주식 구조 또는 희석 반영)")
+
             if existing:
                 existing.net_income = financial['net_income']
                 existing.total_equity = financial['total_equity']
                 existing.current_price = market_data['current_price']
-                existing.total_shares = market_data['total_shares']
+                existing.total_shares = total_shares
                 existing.dividend_per_share = market_data['dividend_per_share']
                 existing.quarterly_dividend = market_data['quarterly_dividend']
                 existing.dividend_increase_years = market_data['dividend_increase_years']
@@ -744,7 +763,7 @@ class USFetcher:
                     net_income=financial['net_income'],
                     total_equity=financial['total_equity'],
                     current_price=market_data['current_price'],
-                    total_shares=market_data['total_shares'],
+                    total_shares=total_shares,
                     dividend_per_share=market_data['dividend_per_share'],
                     quarterly_dividend=market_data['quarterly_dividend'],
                     dividend_increase_years=market_data['dividend_increase_years'],

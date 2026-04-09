@@ -443,20 +443,20 @@ def export_data(market=None):
         with open(filename, 'w', newline='\n', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
 
-            # 헤더 작성: 정량 항목별 값+점수, 정량합계, 정성평가 빈칸, 최종점수
+            # 헤더 작성
+            # A~D: 종목 정보 | E~R: 정량 항목(값+점수) | S~X: 정성 항목(빈칸) | Y: 정량합계 | Z: 정성합계 | AA: 최종점수 | AB: 메모
             headers = [
-                '순위', '종목명', '종목코드', '시장',
-                'PER', 'PER점수(/20)', 'PBR', 'PBR점수(/5)',
-                '배당수익률(%)', '배당수익률점수(/10)',
-                '분기배당', '분기배당점수(/5)',
-                '배당연속인상(년)', '배당인상점수(/5)',
-                '자사주비율(%)', '자사주비율점수(/5)',
-                '자사주매입소각', '매입소각점수(/7)',
-                '정량합계',
-                '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)',
-                '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)',
-                '최종_예상점수',
-                '메모'
+                '순위', '종목명', '종목코드', '시장',                              # A~D
+                'PER', 'PER점수(/20)', 'PBR', 'PBR점수(/5)',                       # E~H
+                '배당수익률(%)', '배당수익률점수(/10)',                              # I~J
+                '분기배당', '분기배당점수(/5)',                                      # K~L
+                '배당연속인상(년)', '배당인상점수(/5)',                              # M~N
+                '자사주비율(%)', '자사주비율점수(/5)',                               # O~P
+                '자사주매입소각', '매입소각점수(/7)',                                # Q~R
+                '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)',       # S~U
+                '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)',         # V~X
+                '정량합계', '정성합계', '최종점수',                                  # Y~AA
+                '메모'                                                               # AB
             ]
             writer.writerow(headers)
 
@@ -476,22 +476,24 @@ def export_data(market=None):
                 treasury_val = f"{processed.treasury_share_ratio:.1f}" if processed else '-'
                 buyback_val = 'O' if raw and raw.share_buyback_cancel else 'X'
 
-                # 엑셀 수식: 정량합계(S열) + 정성평가 항목들(T~Y열) 합산
+                # 엑셀 수식
+                # 정성합계(Z열): 정성 항목 6개(S~X) 합산
+                # 최종점수(AA열): 정량합계(Y) + 정성합계(Z)
                 row_num = i + 1
-                excel_formula = f"=S{row_num}+SUM(T{row_num}:Y{row_num})"
+                qualitative_sum = f"=SUM(S{row_num}:X{row_num})"
+                total_formula = f"=Y{row_num}+Z{row_num}"
 
                 row = [
-                    i, name, score.ticker, market_name,
-                    per_val, score.score_per, pbr_val, score.score_pbr,
-                    div_yield_val, score.score_div_yield,
-                    q_div_val, score.score_div_quarter,
-                    div_inc_val, score.score_div_inc,
-                    treasury_val, score.score_treasury_ratio,
-                    buyback_val, score.score_buyback,
-                    score.total_score,
-                    '', '', '', '', '', '',
-                    excel_formula,
-                    ''
+                    i, name, score.ticker, market_name,                 # A~D
+                    per_val, score.score_per, pbr_val, score.score_pbr, # E~H
+                    div_yield_val, score.score_div_yield,                # I~J
+                    q_div_val, score.score_div_quarter,                  # K~L
+                    div_inc_val, score.score_div_inc,                    # M~N
+                    treasury_val, score.score_treasury_ratio,            # O~P
+                    buyback_val, score.score_buyback,                    # Q~R
+                    '', '', '', '', '', '',                               # S~X (정성, 빈칸)
+                    score.total_score, qualitative_sum, total_formula,   # Y~AA
+                    ''                                                    # AB (메모)
                 ]
                 writer.writerow(row)
                 

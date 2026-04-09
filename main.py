@@ -162,7 +162,12 @@ def fetch_us_data(limit=None):
     ]
     db.close()
 
-    target_tickers = [t for t in all_tickers if t not in fetched_today]
+    # 우선주 제외: 티커에 '-P' + 알파벳 패턴 (JPM-PC, WFC-PY, BAC-PE 등)
+    # S&P 500 등 주요 지수와 동일하게 보통주만 평가 대상으로 함
+    preferred_excluded = [t for t in all_tickers if '-P' in t]
+    if preferred_excluded:
+        print(f"우선주 {len(preferred_excluded)}개 제외: {', '.join(preferred_excluded[:5])}{'...' if len(preferred_excluded) > 5 else ''}")
+    target_tickers = [t for t in all_tickers if t not in fetched_today and '-P' not in t]
 
     if limit is not None:
         target_tickers = target_tickers[:limit]

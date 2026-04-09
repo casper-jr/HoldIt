@@ -128,7 +128,7 @@ class FinancialProcessor:
             self.db.add(processed)
             print(f"가공 데이터 신규 저장: {raw_data.ticker} ({raw_data.record_date})")
             
-        print(f"   └─ EPS: {eps:,.0f}(₩or$) | PER: {per:.2f}배 | PBR: {pbr:.2f}배 | 배당수익률: {dividend_yield:.2f}% | 자사주비율: {treasury_share_ratio:.2f}%")
+        print(f"   └─ EPS: {eps:,.0f} | PER: {per:.2f}배 | PBR: {pbr:.2f}배 | 배당수익률: {dividend_yield:.2f}% | 자사주비율: {treasury_share_ratio:.2f}%")
 
 if __name__ == "__main__":
     processor = FinancialProcessor()

@@ -518,6 +518,23 @@ if __name__ == "__main__":
             else:
                 print("시장 구분은 'kr' 또는 'us'를 입력해주세요.")
             
+        elif command == "refetch":
+            # refetch <ticker> : FetchHistory 무관하게 특정 종목 강제 재수집
+            if len(sys.argv) < 3:
+                print("사용법: python3 main.py refetch <종목코드>  (예: refetch 316140, refetch AAPL)")
+                sys.exit(1)
+            target = sys.argv[2].upper()
+            # KR vs US 구분: 숫자 6자리면 KR
+            if target.isdigit():
+                fetcher_kr = DartFetcher()
+                fetcher_kr.load_corp_codes()
+                print(f"\n--- [강제 재수집] 종목코드: {target} ---")
+                fetcher_kr.save_to_db(target)
+            else:
+                fetcher_us = USFetcher()
+                print(f"\n--- [강제 재수집] 티커: {target} ---")
+                fetcher_us.save_to_db(target)
+
         elif command == "process":
             process_data()
             
@@ -552,8 +569,9 @@ if __name__ == "__main__":
             print("알 수 없는 명령어입니다.")
     else:
         print("사용법:")
-        print("  python3 main.py fetch kr <개수|all> : [1단계] 한국 주식 원본 데이터 수집 (예: fetch kr 100, fetch kr all)")
-        print("  python3 main.py fetch us <개수|all> : [1단계] 미국 주식 원본 데이터 수집 - 시가총액 순 (예: fetch us 50)")
+        print("  python3 main.py fetch kr <개수|all>  : [1단계] 한국 주식 원본 데이터 수집 (예: fetch kr 100, fetch kr all)")
+        print("  python3 main.py fetch us <개수|all>  : [1단계] 미국 주식 원본 데이터 수집 - 시가총액 순 (예: fetch us 50)")
+        print("  python3 main.py refetch <종목코드>   : [1단계] 특정 종목 강제 재수집 (오늘 이미 수집한 종목도 재수집, 예: refetch 316140, refetch AAPL)")
         print("  python3 main.py process             : [2단계] DB의 원본 데이터를 바탕으로 가공 지표 계산")
         print("  python3 main.py score               : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
         print("  python3 main.py view [kr|us] <개수>  : [4단계] 리더보드 조회 (예: view, view kr, view us 100)")

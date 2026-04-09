@@ -531,7 +531,11 @@ class USFetcher:
     def get_financial_data(self, ticker):
         """
         yfinance에서 재무제표 데이터(당기순이익, 자본총계, 자사주)를 가져옵니다.
-        가장 최근 연간 재무제표(Annual) 기준입니다.
+        - 당기순이익(EPS용): 가장 최근 4개 분기 합산 (TTM)
+          Naver 증권의 'EPS = 지배기업귀속 최근 분기 합산 순이익 / 수정평균발행주식수' 방식과 동일.
+          연간 보고서 단일 값(income_stmt)은 대규모 일회성 비용이 있는 해에 TTM과 크게 달라질 수 있음.
+        - 자본총계·자사주(PBR용): 가장 최근 분기 재무제표(quarterly_balance_sheet) 기준
+        - record_date: 분기 balance sheet의 기준일을 사용
         """
         result = {
             'net_income': 0.0,
@@ -543,30 +547,34 @@ class USFetcher:
         try:
             stock = yf.Ticker(ticker)
 
-            # Income Statement - 당기순이익
-            income_stmt = stock.income_stmt
-            if income_stmt is not None and not income_stmt.empty:
-                if 'Net Income' in income_stmt.index:
-                    val = income_stmt.loc['Net Income'].iloc[0]
-                    if pd.notna(val):
-                        result['net_income'] = float(val)
-                result['record_date'] = income_stmt.columns[0].date()
+            # 당기순이익: 가장 최근 4개 분기 합산 (TTM)
+            # quarterly_income_stmt 컬럼은 최신 → 과거 순서 (iloc[0] = 가장 최근 분기)
+            q_income = stock.quarterly_income_stmt
+            if q_income is not None and not q_income.empty:
+                if 'Net Income' in q_income.index:
+                    net_income_row = q_income.loc['Net Income']
+                    recent_4q = net_income_row.iloc[:4].dropna()
+                    if not recent_4q.empty:
+                        result['net_income'] = float(recent_4q.sum())
 
-            # Balance Sheet - 자본총계, 자사주
-            balance = stock.balance_sheet
-            if balance is not None and not balance.empty:
-                if 'Stockholders Equity' in balance.index:
-                    val = balance.loc['Stockholders Equity'].iloc[0]
+            # 자본총계·자사주: 가장 최근 분기 재무제표
+            q_balance = stock.quarterly_balance_sheet
+            if q_balance is not None and not q_balance.empty:
+                if 'Stockholders Equity' in q_balance.index:
+                    val = q_balance.loc['Stockholders Equity'].iloc[0]
                     if pd.notna(val):
                         result['total_equity'] = float(val)
 
-                if 'Treasury Shares Number' in balance.index:
-                    val = balance.loc['Treasury Shares Number'].iloc[0]
+                if 'Treasury Shares Number' in q_balance.index:
+                    val = q_balance.loc['Treasury Shares Number'].iloc[0]
                     if pd.notna(val):
                         result['treasury_shares'] = abs(float(val))
 
-                if result['record_date'] is None:
-                    result['record_date'] = balance.columns[0].date()
+                result['record_date'] = q_balance.columns[0].date()
+
+            # quarterly_balance_sheet가 없으면 quarterly_income_stmt 날짜로 폴백
+            if result['record_date'] is None and q_income is not None and not q_income.empty:
+                result['record_date'] = q_income.columns[0].date()
 
             if result['record_date']:
                 print(f"✅ {ticker} 재무제표 수집 성공 (기준일: {result['record_date']})")

@@ -440,7 +440,7 @@ def export_data(market=None):
         filename = os.path.join(export_dir, f"holdit_{market_suffix}_{date.today().strftime('%Y%m%d')}.csv")
 
         # utf-8-sig를 사용하여 엑셀에서 한글이 깨지지 않도록 함
-        with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(filename, 'w', newline='\n', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
 
             # 헤더 작성: 정량 항목별 값+점수, 정량합계, 정성평가 빈칸, 최종점수

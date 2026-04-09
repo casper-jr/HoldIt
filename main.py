@@ -288,35 +288,34 @@ def show_leaderboard(limit=100, market=None):
             return
 
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
-        print(f"\n=====================================================================================================================================================================")
+        print(f"\n{'=' * 160}")
         print(f"우량주 평가 리더보드 [{market_label}] (Top {limit}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
-        print(f"=====================================================================================================================================================================")
+        print(f"{'=' * 160}")
         
         # 헤더 출력
-        header = f"{pad_string('순위', 5)} | {pad_string('종목명', 16)} | {pad_string('종목코드', 8)} | {pad_string('총점', 5)} | {pad_string('등급', 4)} | {pad_string('PER', 12)} | {pad_string('PBR', 12)} | {pad_string('배당수익', 14)} | {pad_string('분기배당', 12)} | {pad_string('배당인상', 12)} | {pad_string('자사주비율', 15)} | {pad_string('매입소각', 12)}"
+        header = f"{pad_string('순위', 5)} | {pad_string('종목명', 16)} | {pad_string('종목코드', 8)} | {pad_string('정량합계(/57)', 14)} | {pad_string('PER(/20)', 12)} | {pad_string('PBR(/5)', 12)} | {pad_string('배당수익(/10)', 14)} | {pad_string('분기배당(/5)', 12)} | {pad_string('배당인상(/5)', 12)} | {pad_string('자사주비율(/5)', 15)} | {pad_string('매입소각(/7)', 13)}"
         print(header)
-        print("-" * 165)
+        print("-" * 160)
 
         for i, (score, company_name) in enumerate(results, 1):
             # 실제 값을 가져오기 위해 Raw, Processed 데이터 조회
             raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == score.ticker).order_by(RawFinancialData.record_date.desc()).first()
             processed = db.query(ProcessedFinancialData).filter(ProcessedFinancialData.ticker == score.ticker).order_by(ProcessedFinancialData.record_date.desc()).first()
-            
+
             # 값 포맷팅 (예: 12.3(5점))
             per_str = f"{processed.per:.1f} ({score.score_per}점)" if processed and processed.per > 0 else f"-({score.score_per}점)"
             pbr_str = f"{processed.pbr:.2f} ({score.score_pbr}점)" if processed and processed.pbr > 0 else f"-({score.score_pbr}점)"
             div_yield_str = f"{processed.dividend_yield:.1f}%({score.score_div_yield}점)" if processed else f"-({score.score_div_yield}점)"
-            
+
             q_div_str = f"{'O' if raw and raw.quarterly_dividend else 'X'}({score.score_div_quarter}점)"
             div_inc_str = f"{raw.dividend_increase_years}년({score.score_div_inc}점)" if raw else f"-({score.score_div_inc}점)"
-            
-            treasury_str = f"{processed.treasury_share_ratio:.1f}%({score.score_treasury_ratio}점)" if processed else f"-({score.score_treasury_ratio}점)"
+
+            treasury_str = f"{processed.treasury_share_ratio:.2f}%({score.score_treasury_ratio}점)" if processed else f"-({score.score_treasury_ratio}점)"
             buyback_str = f"{'O' if raw and raw.share_buyback_cancel else 'X'}({score.score_buyback}점)"
 
             # 종목명이 너무 길면 자르기 (한글 너비 고려)
             name_display = company_name
             if get_display_width(name_display) > 14:
-                # 대략적으로 자르기
                 temp_width = 0
                 temp_name = ""
                 for char in name_display:
@@ -327,10 +326,10 @@ def show_leaderboard(limit=100, market=None):
                     temp_width += w
                 name_display = temp_name + "..."
 
-            row = f"{pad_string(i, 5)} | {pad_string(name_display, 16)} | {pad_string(score.ticker, 8)} | {pad_string(score.total_score, 5)} | {pad_string(score.grade, 4)} | {pad_string(per_str, 12)} | {pad_string(pbr_str, 12)} | {pad_string(div_yield_str, 14)} | {pad_string(q_div_str, 12)} | {pad_string(div_inc_str, 12)} | {pad_string(treasury_str, 15)} | {pad_string(buyback_str, 12)}"
+            row = f"{pad_string(i, 5)} | {pad_string(name_display, 16)} | {pad_string(score.ticker, 8)} | {pad_string(score.total_score, 14)} | {pad_string(per_str, 12)} | {pad_string(pbr_str, 12)} | {pad_string(div_yield_str, 14)} | {pad_string(q_div_str, 12)} | {pad_string(div_inc_str, 12)} | {pad_string(treasury_str, 15)} | {pad_string(buyback_str, 13)}"
             print(row)
-            
-        print("=====================================================================================================================================================================\n")
+
+        print("=" * 160 + "\n")
     finally:
         db.close()
 

@@ -1,0 +1,68 @@
+name: Weekly Stock Export
+
+on:
+  schedule:
+    - cron: '0 8 * * 5'  # 매주 금요일 17:00 KST (08:00 UTC)
+  workflow_dispatch:        # 수동 실행 (Actions 탭에서 직접 트리거 가능)
+    inputs:
+      kr_limit:
+        description: 'KR 수집 개수 (테스트 시 3~5 권장)'
+        default: '200'
+      us_limit:
+        description: 'US 수집 개수 (테스트 시 3~5 권장)'
+        default: '1000'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 최대 6시간
+    permissions:
+      contents: write  # git push 허용
+
+    env:
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Initialize DB tables
+        run: python3 -c "from models import Base; from database import engine; Base.metadata.create_all(engine)"
+
+      - name: Fetch KR
+        run: python3 main.py fetch kr ${{ github.event.inputs.kr_limit || '200' }}
+
+      - name: Fetch US
+        run: python3 main.py fetch us ${{ github.event.inputs.us_limit || '1000' }}
+
+      - name: Process
+        run: python3 main.py process
+
+      - name: Score
+        run: python3 main.py score
+
+      - name: Export CSV
+        run: python3 main.py export
+
+      - name: Commit and push CSV
+        run: |
+          git config user.name "holdit-bot"
+          git config user.email "holdit-bot@users.noreply.github.com"
+          DATE=$(TZ=Asia/Seoul date +%Y%m%d)
+          git add export/
+          git diff --staged --quiet || git commit -m "${DATE} export"
+          git push

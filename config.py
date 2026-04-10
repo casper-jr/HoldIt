@@ -1,5 +1,4 @@
 import os
-from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 # .env 파일 로드
@@ -14,6 +13,3 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
-
-# SQLAlchemy용 DB URL 생성
-DATABASE_URL = f"postgresql://{quote_plus(DB_USER or '')}:{quote_plus(DB_PASSWORD or '')}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

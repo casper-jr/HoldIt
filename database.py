@@ -1,9 +1,18 @@
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
-from config import DATABASE_URL
+from config import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 # SQLAlchemy 엔진 생성
-engine = create_engine(DATABASE_URL)
+# URL.create()를 사용하면 비밀번호의 특수문자를 자동으로 처리함
+engine = create_engine(URL.create(
+    drivername="postgresql+psycopg2",
+    username=DB_USER,
+    password=DB_PASSWORD,
+    host=DB_HOST,
+    port=int(DB_PORT) if DB_PORT else 5432,
+    database=DB_NAME,
+))
 
 # 세션 팩토리 생성
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

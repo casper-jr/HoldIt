@@ -42,23 +42,11 @@ class FinancialProcessor:
         self.db.close()
         print("모든 데이터 가공 및 DB 저장 완료!")
 
-    def _get_yfinance_per_pbr(self, ticker):
+    def _get_yfinance_info_if_currency_mismatch(self, ticker):
         """
-        yfinance info에서 PER(trailingPE)과 PBR(priceToBook)을 직접 가져옵니다.
-        ADR 등 주가 통화와 재무제표 통화가 다른 종목에 사용합니다.
-        """
-        try:
-            import yfinance as yf
-            info = yf.Ticker(ticker).info
-            per = float(info.get('trailingPE', 0) or 0)
-            pbr = float(info.get('priceToBook', 0) or 0)
-            return per, pbr
-        except Exception:
-            return 0.0, 0.0
-
-    def _is_currency_mismatch(self, ticker):
-        """
-        주가 통화(currency)와 재무제표 통화(financialCurrency)가 다른지 확인합니다.
+        주가 통화(currency)와 재무제표 통화(financialCurrency)가 다른 경우에만
+        yfinance PER/PBR을 반환합니다. API 호출을 1번으로 통합합니다.
+        통화가 일치하거나 오류 시 (False, 0.0, 0.0) 반환.
         """
         try:
             import yfinance as yf
@@ -66,10 +54,12 @@ class FinancialProcessor:
             currency = info.get('currency', '')
             financial_currency = info.get('financialCurrency', '')
             if currency and financial_currency and currency != financial_currency:
-                return True
+                per = float(info.get('trailingPE', 0) or 0)
+                pbr = float(info.get('priceToBook', 0) or 0)
+                return True, per, pbr
         except Exception:
             pass
-        return False
+        return False, 0.0, 0.0
 
     def process_single(self, raw_data):
         """
@@ -100,10 +90,10 @@ class FinancialProcessor:
             if bps > 0 and raw_data.current_price:
                 pbr = raw_data.current_price / bps
 
-        # US 종목: 통화 불일치 시 yfinance 제공 PER/PBR 사용
-        if not is_kr and self._is_currency_mismatch(raw_data.ticker):
-            yf_per, yf_pbr = self._get_yfinance_per_pbr(raw_data.ticker)
-            if yf_per > 0 or yf_pbr > 0:
+        # US 종목: 통화 불일치 시 yfinance 제공 PER/PBR 사용 (API 호출 1회로 통합)
+        if not is_kr:
+            mismatch, yf_per, yf_pbr = self._get_yfinance_info_if_currency_mismatch(raw_data.ticker)
+            if mismatch and (yf_per > 0 or yf_pbr > 0):
                 print(f"   통화 불일치 감지 ({raw_data.ticker}) → yfinance PER/PBR 사용: PER={yf_per:.2f}, PBR={yf_pbr:.2f}")
                 per = yf_per
                 pbr = yf_pbr

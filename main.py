@@ -91,7 +91,7 @@ def fetch_data(limit=None):
             try:
                 fetcher.save_to_db(ticker)
                 success_count += 1
-                time.sleep(0.5)
+                time.sleep(0.3)
             except KeyboardInterrupt:
                 break
             except Exception as e:
@@ -191,7 +191,7 @@ def fetch_us_data(limit=None):
             try:
                 fetcher.save_to_db(ticker)
                 success_count += 1
-                time.sleep(0.5)
+                time.sleep(0.1)
             except KeyboardInterrupt:
                 break
             except Exception as e:

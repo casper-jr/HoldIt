@@ -27,8 +27,9 @@ class RawFinancialData(Base):
     share_buyback_cancel = Column(Boolean, default=False)
     cancel_shares = Column(Float, default=0.0)
     treasury_shares = Column(Float, default=0.0)
-    
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class ProcessedFinancialData(Base):
     __tablename__ = 'processed_financial_data'
@@ -43,8 +44,9 @@ class ProcessedFinancialData(Base):
     dividend_yield = Column(Float)
     cancel_ratio = Column(Float)
     treasury_share_ratio = Column(Float)
-    
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class QualitativeAssessment(Base):
     __tablename__ = 'qualitative_assessments'

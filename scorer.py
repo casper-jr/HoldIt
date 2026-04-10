@@ -1,6 +1,7 @@
+from datetime import date
+from sqlalchemy import func
 from database import SessionLocal
 from models import RawFinancialData, ProcessedFinancialData, ScoringResult
-from datetime import date
 
 class StockScorer:
     def __init__(self):
@@ -59,21 +60,35 @@ class StockScorer:
         if total_score >= 50: return 'C'
         return 'D'
 
-    def score_all(self):
+    def score_all(self, today_only=True):
         """
         가공된 데이터를 바탕으로 점수를 계산하고 저장합니다.
-        현재는 정량적 데이터(PER, PBR, 배당수익률)만 점수에 반영합니다.
+        today_only=True (기본값): 오늘 처리된 종목만 채점 (updated_at 기준)
+        today_only=False      : DB 전체 재채점
         """
         print("🧮 점수 계산을 시작합니다...")
-        processed_list = self.db.query(ProcessedFinancialData).all()
-        
+
+        if today_only:
+            today = date.today()
+            processed_list = self.db.query(ProcessedFinancialData).filter(
+                func.date(ProcessedFinancialData.updated_at) == today
+            ).all()
+            if not processed_list:
+                print("오늘 업데이트된 가공 데이터가 없습니다.")
+                print("전체 재채점이 필요하면: python3 main.py score --all")
+                return
+            print(f"오늘 업데이트된 {len(processed_list)}개 종목만 채점합니다.")
+        else:
+            processed_list = self.db.query(ProcessedFinancialData).all()
+            print(f"전체 {len(processed_list)}개 종목을 채점합니다.")
+
         if not processed_list:
             print("⚠️ 평가할 가공 데이터(ProcessedFinancialData)가 없습니다.")
             return
 
         for processed in processed_list:
             self.score_single(processed)
-            
+
         self.db.commit()
         self.db.close()
         print("✅ 모든 점수 계산 및 DB 저장 완료!")

@@ -205,27 +205,31 @@ def fetch_us_data(limit=None):
         print(f"\n수집 완료! (성공: {success_count}/{total_count})")
 
 
-def process_data():
+def process_data(all_data=False):
     """
     2단계: DB에 저장된 원본 데이터를 바탕으로 가공 지표(EPS, PER 등)를 계산하여 DB(ProcessedFinancialData)에 저장합니다.
+    all_data=False (기본값): 오늘 fetch된 종목만 처리
+    all_data=True         : DB 전체 재처리
     """
     print(f"\n========================================")
-    print(f"[2단계: 가공] 원본 데이터를 평가 지표로 가공 시작")
+    print(f"[2단계: 가공] 원본 데이터를 평가 지표로 가공 시작" + (" (전체)" if all_data else " (오늘 업데이트분)"))
     print(f"========================================\n")
-    
-    processor = FinancialProcessor()
-    processor.process_all()
 
-def score_data():
+    processor = FinancialProcessor()
+    processor.process_all(today_only=not all_data)
+
+def score_data(all_data=False):
     """
     3단계: 가공된 지표를 바탕으로 점수와 등급을 계산하여 DB(ScoringResult)에 저장합니다.
+    all_data=False (기본값): 오늘 처리된 종목만 채점
+    all_data=True         : DB 전체 재채점
     """
     print(f"\n========================================")
-    print(f"[3단계: 평가] 가공 지표를 바탕으로 점수 산정 시작")
+    print(f"[3단계: 평가] 가공 지표를 바탕으로 점수 산정 시작" + (" (전체)" if all_data else " (오늘 업데이트분)"))
     print(f"========================================\n")
-    
+
     scorer = StockScorer()
-    scorer.score_all()
+    scorer.score_all(today_only=not all_data)
 
 def get_display_width(s):
     """
@@ -544,10 +548,12 @@ if __name__ == "__main__":
                 fetcher_us.save_to_db(target)
 
         elif command == "process":
-            process_data()
-            
+            all_flag = '--all' in sys.argv
+            process_data(all_flag)
+
         elif command == "score":
-            score_data()
+            all_flag = '--all' in sys.argv
+            score_data(all_flag)
             
         elif command == "view":
             # view / view 50 / view kr / view us / view kr 50 / view us 50
@@ -581,8 +587,8 @@ if __name__ == "__main__":
         print("  python3 main.py fetch kr <개수|all>  : [1단계] 한국 주식 원본 데이터 수집 (예: fetch kr 100, fetch kr all)")
         print("  python3 main.py fetch us <개수|all>  : [1단계] 미국 주식 원본 데이터 수집 - 시가총액 순 (예: fetch us 50)")
         print("  python3 main.py refetch <종목코드>   : [1단계] 특정 종목 강제 재수집 (오늘 이미 수집한 종목도 재수집, 예: refetch 316140, refetch AAPL)")
-        print("  python3 main.py process             : [2단계] DB의 원본 데이터를 바탕으로 가공 지표 계산")
-        print("  python3 main.py score               : [3단계] 가공된 지표를 바탕으로 점수 산정 및 등급 부여")
+        print("  python3 main.py process [--all]      : [2단계] 가공 지표 계산 (기본: 오늘 fetch분만 / --all: 전체 재처리)")
+        print("  python3 main.py score [--all]        : [3단계] 점수 산정 (기본: 오늘 처리분만 / --all: 전체 재채점)")
         print("  python3 main.py view [kr|us] [개수]  : [4단계] 리더보드 조회 - 개수 미지정 시 임계값 이상 전체 출력 (예: view, view kr, view us 50)")
         print("  python3 main.py detail <종목>       : 특정 종목의 상세 평가 결과 조회 (예: 005930, KO)")
         print("  python3 main.py export [kr|us]       : [5단계] 정성 평가용 엑셀(CSV) 파일 내보내기 (예: export, export kr, export us)")

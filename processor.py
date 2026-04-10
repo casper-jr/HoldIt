@@ -1,3 +1,5 @@
+from datetime import date
+from sqlalchemy import func
 from database import SessionLocal
 from models import Company, RawFinancialData, ProcessedFinancialData
 
@@ -7,12 +9,27 @@ class FinancialProcessor:
     def __init__(self):
         self.db = SessionLocal()
 
-    def process_all(self):
+    def process_all(self, today_only=True):
         """
-        DB에 저장된 모든 Raw 데이터를 읽어와서 가공 지표를 계산하고 저장합니다.
+        DB에 저장된 Raw 데이터를 읽어와서 가공 지표를 계산하고 저장합니다.
+        today_only=True (기본값): 오늘 fetch된 종목만 처리 (updated_at 기준)
+        today_only=False      : DB 전체 재처리
         """
         print("데이터 가공을 시작합니다...")
-        raw_data_list = self.db.query(RawFinancialData).all()
+
+        if today_only:
+            today = date.today()
+            raw_data_list = self.db.query(RawFinancialData).filter(
+                func.date(RawFinancialData.updated_at) == today
+            ).all()
+            if not raw_data_list:
+                print("오늘 업데이트된 원본 데이터가 없습니다.")
+                print("전체 재처리가 필요하면: python3 main.py process --all")
+                return
+            print(f"오늘 업데이트된 {len(raw_data_list)}개 종목만 처리합니다.")
+        else:
+            raw_data_list = self.db.query(RawFinancialData).all()
+            print(f"전체 {len(raw_data_list)}개 종목을 처리합니다.")
 
         if not raw_data_list:
             print("가공할 원본 데이터(RawFinancialData)가 없습니다.")

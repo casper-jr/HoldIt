@@ -269,17 +269,13 @@ class DartFetcher:
                 return parsed[0], parsed[1]
         return 0.0, 0.0
 
-    def check_buyback_and_cancel(self, corp_code):
+    def check_cancel(self, corp_code):
         """
-        현재 시점 기준으로 최근 1년 내에 자사주 매입(취득)과 소각 공시가 
-        각각 1건 이상 존재하는지 확인합니다.
+        현재 시점 기준으로 최근 1년 내에 자사주 소각 공시가 1건 이상 존재하는지 확인합니다.
+        단순 매입 보유가 아닌 실제 소각 실적만 평가하도록 매입(취득) 조건을 제거했습니다.
         """
         one_year_ago = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d')
-        
-        has_buyback = False
-        has_cancel = False
-        
-        # 최근 1년간의 전체 공시 목록을 가져와서 제목으로 검색 (최대 100건)
+
         url = f"{self.base_url}/list.json"
         params = {
             'crtfc_key': self.api_key,
@@ -287,28 +283,56 @@ class DartFetcher:
             'bgn_de': one_year_ago,
             'page_count': 100
         }
-        
+
         try:
             response = requests.get(url, params=params)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('status') == '000':
                     for r in data.get('list', []):
-                        report_nm = r.get('report_nm', '')
-                        # 자사주 취득(매입) 관련 공시
-                        if '자기주식취득' in report_nm:
-                            has_buyback = True
-                        # 자사주 소각 관련 공시
-                        if '소각' in report_nm:
-                            has_cancel = True
-                            
-                        # 둘 다 찾았으면 더 이상 검색할 필요 없음
-                        if has_buyback and has_cancel:
-                            break
-        except Exception as e:
+                        if '소각' in r.get('report_nm', ''):
+                            return True
+        except Exception:
             pass
-            
-        return has_buyback and has_cancel
+
+        return False
+
+    def get_capex_dart(self, corp_code, year, reprt_code):
+        """
+        DART 전체 재무제표(fnlttSinglAcntAll)에서 CapEx(유형자산의 취득)를 추출합니다.
+        투자활동현금흐름 내 유형자산 취득 항목을 찾아 양수로 반환합니다.
+        데이터 없거나 오류 시 0.0 반환.
+        """
+        url = f"{self.base_url}/fnlttSinglAcntAll.json"
+        for fs_div in ('CFS', 'OFS'):
+            params = {
+                'crtfc_key': self.api_key,
+                'corp_code': corp_code,
+                'bsns_year': str(year),
+                'reprt_code': reprt_code,
+                'fs_div': fs_div,
+            }
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                if response.status_code != 200:
+                    continue
+                data = response.json()
+                if data.get('status') != '000':
+                    continue
+
+                for item in data.get('list', []):
+                    account_nm = item.get('account_nm', '').replace(' ', '')
+                    # 유형자산의취득, 유형자산취득 등 매칭
+                    if '유형자산' in account_nm and ('취득' in account_nm or '구입' in account_nm):
+                        val_str = item.get('thstrm_amount', '').replace(',', '')
+                        try:
+                            val = float(val_str)
+                            return abs(val)  # 현금 유출(음수)이므로 절댓값 반환
+                        except ValueError:
+                            continue
+            except Exception:
+                continue
+        return 0.0
 
     def get_market_data(self, stock_code):
         """
@@ -319,54 +343,36 @@ class DartFetcher:
             'current_price': 0.0,
             'total_shares': 0.0,
             'dividend_per_share': 0.0,
-            'quarterly_dividend': False,
-            'dividend_increase_years': 0
+            'dividend_increase_years': 0,
         }
-        
+
         # 코스피(.KS) 먼저 시도, 안되면 코스닥(.KQ) 시도
         for suffix in ['.KS', '.KQ']:
             yf_ticker = f"{stock_code}{suffix}"
             ticker = yf.Ticker(yf_ticker)
-            
+
             try:
                 info = ticker.info
-                # info 딕셔너리에 주가 정보가 있는지 확인
                 if info and ('regularMarketPrice' in info or 'currentPrice' in info or 'previousClose' in info):
                     current_price = info.get('currentPrice', info.get('previousClose', 0))
-                    
                     if current_price == 0:
-                        continue # 주가 정보가 없으면 다른 시장(suffix)으로 재시도
-                        
+                        continue
+
                     market_data['current_price'] = float(current_price)
                     market_data['total_shares'] = float(info.get('sharesOutstanding', 0))
-                    # 1주당 연간 배당금·연속 인상: TTM이 아님. KRX는 1~2월 지급분을 전년도로 묶은 뒤
-                    # '직전 완료 연도(last_year)' 합계를 쓴다 (결산 배당이 캘린더만 쓸 때 연도가 갈라지는 문제 방지).
+
+                    # 1주당 연간 배당금: KRX는 1~2월 지급분을 전년도로 묶어 집계
                     dividends = ticker.dividends
                     if not dividends.empty:
                         yearly_divs = _krx_yearly_dividend_totals(dividends)
-                        
-                        current_year = pd.Timestamp.now().year
-                        last_year = current_year - 1
-                        
-                        # 작년 배당금이 있으면 작년 값을, 없으면 0으로 처리
-                        if last_year in yearly_divs:
-                            market_data['dividend_per_share'] = float(yearly_divs[last_year])
-                        else:
-                            market_data['dividend_per_share'] = 0.0
-                        
-                        # 1. 분기 배당 여부 확인 (최근 1년 내 배당금 지급 횟수가 3회 이상이면 분기배당으로 간주)
-                        one_year_ago = pd.Timestamp.now(tz=dividends.index.tz) - pd.DateOffset(days=365)
-                        recent_divs = dividends[dividends.index >= one_year_ago]
-                        if len(recent_divs) >= 3:
-                            market_data['quarterly_dividend'] = True
-                            
-                        # 2. 배당 연속 인상 연수: 연간 합계는 캘린더 연도별로 두고,
-                        #    dividend_per_share와 동일하게 '직전 완료 연도(last_year)'를 끝점으로 삼는다.
-                        #    last_year > last_year-1 > ... 를 (y, y-1)가 모두 데이터에 있을 때만 strict 비교한다.
-                        #    중간에 배당 실적이 없는 해(인덱스 없음)가 끼면 연속이 끊긴 것으로 본다.
+                        last_year = pd.Timestamp.now().year - 1
+
+                        market_data['dividend_per_share'] = float(yearly_divs[last_year]) \
+                            if last_year in yearly_divs else 0.0
+
+                        # 배당 연속 인상 연수 (직전 완료 연도 기준, 중간 공백 시 연속 끊김으로 처리)
                         if last_year in yearly_divs.index:
-                            y = int(last_year)
-                            streak = 0
+                            y, streak = int(last_year), 0
                             while True:
                                 prev_y = y - 1
                                 if prev_y not in yearly_divs.index:
@@ -377,13 +383,13 @@ class DartFetcher:
                                 else:
                                     break
                             market_data['dividend_increase_years'] = streak
-                    
+
                     print(f"📈 yfinance 데이터 수집 성공 ({yf_ticker}): 현재가 {market_data['current_price']:,.0f}원")
-                    print(f"   └─ 분기배당: {market_data['quarterly_dividend']} | 연속인상: {market_data['dividend_increase_years']}년")
+                    print(f"   └─ 연속인상: {market_data['dividend_increase_years']}년")
                     return market_data
-            except Exception as e:
+            except Exception:
                 continue
-                
+
         print(f"⚠️ yfinance에서 {stock_code}의 시장 데이터를 찾을 수 없습니다.")
         return market_data
 
@@ -494,37 +500,54 @@ class DartFetcher:
             # 2. 재무 데이터 파싱
             net_income = 0.0
             total_equity = 0.0
-            
-            # 자본총계 파싱 (최근 분기 데이터 기준)
+            total_liabilities = 0.0
+            operating_cash_flow = 0.0
+
+            # 재무상태표 항목 파싱 (최근 분기 기준): 자본총계, 부채총계
             for item in latest_data_list:
                 account_nm = item.get('account_nm', '').replace(' ', '')
+                try:
+                    amount = float(item.get('thstrm_amount', '0').replace(',', ''))
+                except ValueError:
+                    continue
+
                 if '자본총계' in account_nm:
-                    try:
-                        amount_str = item.get('thstrm_amount', '0').replace(',', '')
-                        amount = float(amount_str)
-                        
-                        if item.get('fs_div') == 'CFS':
-                            total_equity = amount
-                        elif item.get('fs_div') == 'OFS' and total_equity == 0.0:
-                            total_equity = amount
-                    except ValueError:
-                        pass
-                        
-            # 당기순이익 파싱 (최근 사업보고서 데이터 기준)
+                    if item.get('fs_div') == 'CFS':
+                        total_equity = amount
+                    elif item.get('fs_div') == 'OFS' and total_equity == 0.0:
+                        total_equity = amount
+
+                if '부채총계' in account_nm:
+                    if item.get('fs_div') == 'CFS':
+                        total_liabilities = amount
+                    elif item.get('fs_div') == 'OFS' and total_liabilities == 0.0:
+                        total_liabilities = amount
+
+            # 손익계산서·현금흐름표 항목 파싱 (사업보고서 연간 기준): 당기순이익, 영업활동현금흐름
             if annual_data_list:
                 for item in annual_data_list:
                     account_nm = item.get('account_nm', '').replace(' ', '')
+                    try:
+                        amount = float(item.get('thstrm_amount', '0').replace(',', ''))
+                    except ValueError:
+                        continue
+
                     if '당기순이익' in account_nm or '당기순손실' in account_nm:
-                        try:
-                            amount_str = item.get('thstrm_amount', '0')
-                            amount = float(amount_str.replace(',', ''))
-                            
-                            if item.get('fs_div') == 'CFS':
-                                net_income = amount
-                            elif item.get('fs_div') == 'OFS' and net_income == 0.0:
-                                net_income = amount
-                        except ValueError:
-                            pass
+                        if item.get('fs_div') == 'CFS':
+                            net_income = amount
+                        elif item.get('fs_div') == 'OFS' and net_income == 0.0:
+                            net_income = amount
+
+                    if '영업활동' in account_nm and '현금흐름' in account_nm:
+                        if item.get('fs_div') == 'CFS':
+                            operating_cash_flow = amount
+                        elif item.get('fs_div') == 'OFS' and operating_cash_flow == 0.0:
+                            operating_cash_flow = amount
+
+            # CapEx(유형자산의 취득) - 사업보고서 전체 재무제표에서 별도 조회
+            capital_expenditure = self.get_capex_dart(
+                corp_info['corp_code'], annual_year or latest_year, '11011'
+            ) if (annual_year or latest_year) else 0.0
 
             # 3. yfinance에서 현재 시장 데이터(주가, 주식수, 배당금 등) 가져오기
             market_data = self.get_market_data(stock_code)
@@ -561,54 +584,47 @@ class DartFetcher:
                     market_data['dividend_increase_years'] = streak
                     print(f"   📊 DART 배당 이력 기반 연속 인상: {streak}년 ({len(dart_div_history)}년치 데이터 확보)")
 
-            # 3.7. DART 주식총수현황에서 자사주 정보 가져오기 (최근 분기 기준)
+            # 3.7. DART 주식총수현황에서 자사주 수 가져오기 (최근 분기 기준)
             total_issued, treasury_shares = self.get_stock_totals(corp_info['corp_code'], latest_year, latest_reprt_code)
 
-            # 3.8. 최근 1년 내 자사주 매입 및 소각 여부 확인
-            is_buyback_cancel = self.check_buyback_and_cancel(corp_info['corp_code'])
-            if is_buyback_cancel:
-                print(f"🏢 자사주 매입 및 소각 공시 확인됨")
+            # 3.8. 최근 1년 내 자사주 소각 여부 확인 (매입 제외, 소각만)
+            is_cancel = self.check_cancel(corp_info['corp_code'])
+            if is_cancel:
+                print(f"🏢 자사주 소각 공시 확인됨")
 
             # 4. RawFinancialData 테이블에 저장
-            # 기준일자는 가장 최근 보고서(latest) 기준으로 설정
-            month, day = 12, 31 # 기본 사업보고서
-            if latest_reprt_code == '11014': month, day = 9, 30  # 3분기
-            elif latest_reprt_code == '11012': month, day = 6, 30 # 반기
-            elif latest_reprt_code == '11013': month, day = 3, 31 # 1분기
-            
+            month, day = 12, 31  # 기본: 사업보고서
+            if latest_reprt_code == '11014': month, day = 9, 30   # 3분기
+            elif latest_reprt_code == '11012': month, day = 6, 30  # 반기
+            elif latest_reprt_code == '11013': month, day = 3, 31  # 1분기
+
             record_date = date(latest_year, month, day)
-            
-            # 이미 같은 날짜의 데이터가 있는지 확인
+
             existing_data = db.query(RawFinancialData).filter(
                 RawFinancialData.ticker == stock_code,
                 RawFinancialData.record_date == record_date
             ).first()
-            
+
+            raw_fields = dict(
+                net_income=net_income,
+                total_equity=total_equity,
+                total_liabilities=total_liabilities,
+                operating_cash_flow=operating_cash_flow,
+                capital_expenditure=capital_expenditure,
+                current_price=market_data['current_price'],
+                total_shares=market_data['total_shares'],
+                dividend_per_share=market_data['dividend_per_share'],
+                dividend_increase_years=market_data['dividend_increase_years'],
+                treasury_shares=treasury_shares,
+                share_cancel=is_cancel,
+            )
+
             if existing_data:
-                existing_data.net_income = net_income
-                existing_data.total_equity = total_equity
-                existing_data.current_price = market_data['current_price']
-                existing_data.total_shares = market_data['total_shares']
-                existing_data.dividend_per_share = market_data['dividend_per_share']
-                existing_data.quarterly_dividend = market_data['quarterly_dividend']
-                existing_data.dividend_increase_years = market_data['dividend_increase_years']
-                existing_data.treasury_shares = treasury_shares
-                existing_data.share_buyback_cancel = is_buyback_cancel
+                for k, v in raw_fields.items():
+                    setattr(existing_data, k, v)
                 print(f"🔄 기존 데이터 업데이트 완료: {corp_name} (기준일: {record_date})")
             else:
-                new_data = RawFinancialData(
-                    ticker=stock_code,
-                    record_date=record_date,
-                    net_income=net_income,
-                    total_equity=total_equity,
-                    current_price=market_data['current_price'],
-                    total_shares=market_data['total_shares'],
-                    dividend_per_share=market_data['dividend_per_share'],
-                    quarterly_dividend=market_data['quarterly_dividend'],
-                    dividend_increase_years=market_data['dividend_increase_years'],
-                    treasury_shares=treasury_shares,
-                    share_buyback_cancel=is_buyback_cancel
-                )
+                new_data = RawFinancialData(ticker=stock_code, record_date=record_date, **raw_fields)
                 db.add(new_data)
                 print(f"💾 새 데이터 DB 저장 완료: {corp_name} (기준일: {record_date}, 당기순이익: {net_income:,.0f}원, 자본총계: {total_equity:,.0f}원)")
                 
@@ -628,38 +644,36 @@ class USFetcher:
 
     def get_financial_data(self, ticker):
         """
-        yfinance에서 재무제표 데이터(당기순이익, 자본총계, 자사주, 희석주식수)를 가져옵니다.
-        - 당기순이익(EPS용): 가장 최근 4개 분기 합산 (TTM)
-          Naver 증권의 'EPS = 지배기업귀속 최근 분기 합산 순이익 / 수정평균발행주식수' 방식과 동일.
-          연간 보고서 단일 값(income_stmt)은 대규모 일회성 비용이 있는 해에 TTM과 크게 달라질 수 있음.
-        - 자본총계·자사주(PBR용): 가장 최근 분기 재무제표(quarterly_balance_sheet) 기준
-        - 총 주식수(EPS·BPS 분모): quarterly_income_stmt의 'Diluted Average Shares' 우선 사용.
-          이중 주식 구조(Dual-Class)에서 info['sharesOutstanding']은 해당 클래스
-          주식수만 반환하지만, Diluted Average Shares는 전사 전체 희석주식수를 반환함.
-        - record_date: 분기 balance sheet의 기준일을 사용
+        yfinance에서 재무제표 데이터를 가져옵니다.
+        - 당기순이익(EPS용): 최근 4분기 합산 TTM
+        - 자본총계·자사주·총부채(PBR·부채비율용): 최근 분기 balance sheet
+        - 영업현금흐름·CapEx(FCF용): 연간 cashflow
+        - 총 주식수: Diluted Average Shares 우선, 없으면 sharesOutstanding 폴백
+        - record_date: 분기 balance sheet의 기준일
         """
         result = {
             'net_income': 0.0,
             'total_equity': 0.0,
+            'total_liabilities': 0.0,
             'treasury_shares': 0.0,
-            'total_shares': 0.0,   # 희석주식수 (이중 주식 구조 대응용, 0이면 sharesOutstanding 폴백)
-            'record_date': None
+            'total_shares': 0.0,
+            'operating_cash_flow': 0.0,
+            'capital_expenditure': 0.0,
+            'record_date': None,
         }
 
         try:
             stock = yf.Ticker(ticker)
 
-            # 당기순이익: 가장 최근 4개 분기 합산 (TTM)
-            # quarterly_income_stmt 컬럼은 최신 → 과거 순서 (iloc[0] = 가장 최근 분기)
+            # 당기순이익 + 희석주식수: 최근 4분기 합산 (TTM)
             q_income = stock.quarterly_income_stmt
             if q_income is not None and not q_income.empty:
                 if 'Net Income' in q_income.index:
-                    net_income_row = q_income.loc['Net Income']
-                    recent_4q = net_income_row.iloc[:4].dropna()
+                    recent_4q = q_income.loc['Net Income'].iloc[:4].dropna()
                     if not recent_4q.empty:
                         result['net_income'] = float(recent_4q.sum())
 
-                # 전사 희석주식수: info['sharesOutstanding']과 달리 이중 주식 구조에서도 전체 합산값 반환
+                # 이중 주식 구조 대응: Diluted Average Shares 우선
                 for shares_key in ('Diluted Average Shares', 'Basic Average Shares'):
                     if shares_key in q_income.index:
                         val = q_income.loc[shares_key].iloc[0]
@@ -667,24 +681,42 @@ class USFetcher:
                             result['total_shares'] = float(val)
                             break
 
-            # 자본총계·자사주: 가장 최근 분기 재무제표
+            # 자본총계·총부채·자사주: 최근 분기 balance sheet
             q_balance = stock.quarterly_balance_sheet
             if q_balance is not None and not q_balance.empty:
-                if 'Stockholders Equity' in q_balance.index:
-                    val = q_balance.loc['Stockholders Equity'].iloc[0]
-                    if pd.notna(val):
-                        result['total_equity'] = float(val)
+                def _get(key):
+                    if key in q_balance.index:
+                        val = q_balance.loc[key].iloc[0]
+                        if pd.notna(val):
+                            return float(val)
+                    return 0.0
 
-                if 'Treasury Shares Number' in q_balance.index:
-                    val = q_balance.loc['Treasury Shares Number'].iloc[0]
-                    if pd.notna(val):
-                        result['treasury_shares'] = abs(float(val))
+                result['total_equity']     = _get('Stockholders Equity')
+                result['total_liabilities'] = _get('Total Liabilities Net Minority Interest')
+                treasury = _get('Treasury Shares Number')
+                result['treasury_shares']  = abs(treasury) if treasury else 0.0
+                result['record_date']      = q_balance.columns[0].date()
 
-                result['record_date'] = q_balance.columns[0].date()
-
-            # quarterly_balance_sheet가 없으면 quarterly_income_stmt 날짜로 폴백
+            # quarterly_balance_sheet 없으면 income_stmt 날짜로 폴백
             if result['record_date'] is None and q_income is not None and not q_income.empty:
                 result['record_date'] = q_income.columns[0].date()
+
+            # 영업현금흐름·CapEx: 연간 cashflow (가장 최근 연도 기준)
+            cashflow = stock.cashflow
+            if cashflow is not None and not cashflow.empty:
+                for ocf_key in ('Operating Cash Flow', 'Cash Flow From Continuing Operating Activities'):
+                    if ocf_key in cashflow.index:
+                        val = cashflow.loc[ocf_key].iloc[0]
+                        if pd.notna(val):
+                            result['operating_cash_flow'] = float(val)
+                            break
+
+                for capex_key in ('Capital Expenditure', 'Purchase Of Property Plant And Equipment'):
+                    if capex_key in cashflow.index:
+                        val = cashflow.loc[capex_key].iloc[0]
+                        if pd.notna(val):
+                            result['capital_expenditure'] = abs(float(val))  # 유출이라 음수 → 양수
+                            break
 
             if result['record_date']:
                 print(f"✅ {ticker} 재무제표 수집 성공 (기준일: {result['record_date']})")
@@ -705,8 +737,7 @@ class USFetcher:
             'current_price': 0.0,
             'total_shares': 0.0,
             'dividend_per_share': 0.0,
-            'quarterly_dividend': False,
-            'dividend_increase_years': 0
+            'dividend_increase_years': 0,
         }
 
         try:
@@ -723,26 +754,15 @@ class USFetcher:
 
             dividends = stock.dividends
             if not dividends.empty:
-                current_year = pd.Timestamp.now().year
-                last_year = current_year - 1
-
-                # 캘린더 연도별 배당금 합계 (KRX 보정 없이 그대로)
+                last_year = pd.Timestamp.now().year - 1
                 yearly_divs = dividends.groupby(dividends.index.year).sum()
 
-                # 작년도 연간 총 배당금
                 if last_year in yearly_divs.index:
                     market_data['dividend_per_share'] = float(yearly_divs[last_year])
 
-                # 분기 배당 여부 (최근 1년 내 3회 이상 지급)
-                one_year_ago = pd.Timestamp.now(tz=dividends.index.tz) - pd.DateOffset(days=365)
-                recent_divs = dividends[dividends.index >= one_year_ago]
-                if len(recent_divs) >= 3:
-                    market_data['quarterly_dividend'] = True
-
                 # 배당 연속 인상 연수 (캘린더 연도 기준)
                 if last_year in yearly_divs.index:
-                    y = int(last_year)
-                    streak = 0
+                    y, streak = int(last_year), 0
                     while True:
                         prev_y = y - 1
                         if prev_y not in yearly_divs.index:
@@ -755,14 +775,14 @@ class USFetcher:
                     market_data['dividend_increase_years'] = streak
 
             print(f"📈 yfinance 데이터 수집 성공 ({ticker}): 현재가 ${market_data['current_price']:,.2f}")
-            print(f"   └─ 분기배당: {market_data['quarterly_dividend']} | 연속인상: {market_data['dividend_increase_years']}년")
+            print(f"   └─ 연속인상: {market_data['dividend_increase_years']}년")
 
         except Exception as e:
             print(f"⚠️ {ticker} 시장 데이터 수집 실패: {e}")
 
         return market_data
 
-    def check_buyback(self, ticker):
+    def check_cancel(self, ticker):
         """
         yfinance 현금흐름표에서 자사주 매입(Repurchase) 여부를 확인합니다.
         미국에서는 자사주 매입 시 대부분 소각(retire)하므로 매입 = 소각으로 간주합니다.
@@ -773,8 +793,7 @@ class USFetcher:
             if cashflow is None or cashflow.empty:
                 return False
 
-            buyback_keys = ['Repurchase Of Capital Stock', 'Common Stock Repurchased']
-            for key in buyback_keys:
+            for key in ('Repurchase Of Capital Stock', 'Common Stock Repurchased'):
                 if key in cashflow.index:
                     val = cashflow.loc[key].iloc[0]
                     if pd.notna(val) and float(val) < 0:
@@ -823,10 +842,10 @@ class USFetcher:
                 record_fetch_history(db, ticker, today, "SKIP_NO_DIVIDEND", "배당금 0")
                 return
 
-            # 4. 자사주 매입/소각 여부
-            is_buyback = self.check_buyback(ticker)
-            if is_buyback:
-                print(f"🏢 자사주 매입(Buyback) 확인됨: {ticker}")
+            # 4. 자사주 소각 여부 (US는 매입≈소각으로 간주)
+            is_cancel = self.check_cancel(ticker)
+            if is_cancel:
+                print(f"🏢 자사주 소각(Buyback) 확인됨: {ticker}")
 
             # 5. RawFinancialData 저장
             record_date = financial['record_date']
@@ -836,38 +855,33 @@ class USFetcher:
                 RawFinancialData.record_date == record_date
             ).first()
 
-            # total_shares 결정: 재무제표 희석주식수 우선, 없으면 info['sharesOutstanding'] 폴백
+            # total_shares: 재무제표 희석주식수 우선, 없으면 info['sharesOutstanding'] 폴백
             # 이중 주식 구조(MKC-V 등)에서 sharesOutstanding은 해당 클래스 주식수만 반환하므로
             # Diluted Average Shares를 우선 사용하여 전사 기준 EPS/BPS를 올바르게 계산
             total_shares = financial['total_shares'] if financial['total_shares'] > 0 else market_data['total_shares']
             if financial['total_shares'] > 0 and abs(financial['total_shares'] - market_data['total_shares']) / max(market_data['total_shares'], 1) > 0.1:
-                print(f"   ℹ️ 주식수 조정: sharesOutstanding={market_data['total_shares']:,.0f} → Diluted Average Shares={financial['total_shares']:,.0f} (이중 주식 구조 또는 희석 반영)")
+                print(f"   ℹ️ 주식수 조정: sharesOutstanding={market_data['total_shares']:,.0f} → Diluted={financial['total_shares']:,.0f}")
+
+            raw_fields = dict(
+                net_income=financial['net_income'],
+                total_equity=financial['total_equity'],
+                total_liabilities=financial['total_liabilities'],
+                operating_cash_flow=financial['operating_cash_flow'],
+                capital_expenditure=financial['capital_expenditure'],
+                current_price=market_data['current_price'],
+                total_shares=total_shares,
+                dividend_per_share=market_data['dividend_per_share'],
+                dividend_increase_years=market_data['dividend_increase_years'],
+                treasury_shares=financial['treasury_shares'],
+                share_cancel=is_cancel,
+            )
 
             if existing:
-                existing.net_income = financial['net_income']
-                existing.total_equity = financial['total_equity']
-                existing.current_price = market_data['current_price']
-                existing.total_shares = total_shares
-                existing.dividend_per_share = market_data['dividend_per_share']
-                existing.quarterly_dividend = market_data['quarterly_dividend']
-                existing.dividend_increase_years = market_data['dividend_increase_years']
-                existing.treasury_shares = financial['treasury_shares']
-                existing.share_buyback_cancel = is_buyback
+                for k, v in raw_fields.items():
+                    setattr(existing, k, v)
                 print(f"🔄 기존 데이터 업데이트: {company_name} ({ticker}, 기준일: {record_date})")
             else:
-                new_data = RawFinancialData(
-                    ticker=ticker,
-                    record_date=record_date,
-                    net_income=financial['net_income'],
-                    total_equity=financial['total_equity'],
-                    current_price=market_data['current_price'],
-                    total_shares=total_shares,
-                    dividend_per_share=market_data['dividend_per_share'],
-                    quarterly_dividend=market_data['quarterly_dividend'],
-                    dividend_increase_years=market_data['dividend_increase_years'],
-                    treasury_shares=financial['treasury_shares'],
-                    share_buyback_cancel=is_buyback
-                )
+                new_data = RawFinancialData(ticker=ticker, record_date=record_date, **raw_fields)
                 db.add(new_data)
                 print(f"💾 새 데이터 저장: {company_name} ({ticker}, 기준일: {record_date})")
 

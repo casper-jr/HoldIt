@@ -659,6 +659,7 @@ class USFetcher:
             'total_shares': 0.0,
             'operating_cash_flow': 0.0,
             'capital_expenditure': 0.0,
+            'eps_growth_rate': None,
             'record_date': None,
         }
 
@@ -717,6 +718,43 @@ class USFetcher:
                         if pd.notna(val):
                             result['capital_expenditure'] = abs(float(val))  # 유출이라 음수 → 양수
                             break
+
+            # EPS 성장률: 연간 EPS 히스토리로 3년 CAGR 계산, 없으면 earningsGrowth 사용
+            try:
+                annual_income = stock.income_stmt
+                if annual_income is not None and not annual_income.empty:
+                    eps_growth = None
+                    for eps_key in ('Diluted EPS', 'Basic EPS'):
+                        if eps_key in annual_income.index:
+                            eps_series = annual_income.loc[eps_key].dropna()
+                            # 최근 연도부터 정렬 (columns는 최근순)
+                            eps_values = eps_series.values  # 최근→과거 순
+                            if len(eps_values) >= 2:
+                                # 이용 가능한 기간으로 CAGR 계산 (최대 3년)
+                                n = min(len(eps_values) - 1, 3)
+                                eps_end = float(eps_values[0])    # 가장 최근
+                                eps_start = float(eps_values[n])  # n년 전
+                                # 양쪽 모두 양수일 때만 의미 있는 CAGR
+                                if eps_end > 0 and eps_start > 0:
+                                    eps_growth = ((eps_end / eps_start) ** (1 / n) - 1) * 100
+                                elif eps_end > 0 and eps_start < 0:
+                                    # 적자→흑자 전환: 성장률 계산 불가
+                                    eps_growth = None
+                                else:
+                                    eps_growth = None
+                            break
+
+                    # EPS 히스토리로 계산 실패 시 earningsGrowth(TTM YoY) fallback
+                    if eps_growth is None:
+                        eg = stock.info.get('earningsGrowth')
+                        if eg is not None and eg > 0:
+                            eps_growth = float(eg) * 100  # 소수 → 퍼센트
+
+                    result['eps_growth_rate'] = eps_growth
+                    if eps_growth is not None:
+                        print(f"   └─ EPS 성장률: {eps_growth:.1f}% ({n if 'n' in dir() else 'TTM'}년 기준)")
+            except Exception as e:
+                print(f"   ⚠️ {ticker} EPS 성장률 계산 실패: {e}")
 
             if result['record_date']:
                 print(f"✅ {ticker} 재무제표 수집 성공 (기준일: {result['record_date']})")
@@ -868,6 +906,7 @@ class USFetcher:
                 total_liabilities=financial['total_liabilities'],
                 operating_cash_flow=financial['operating_cash_flow'],
                 capital_expenditure=financial['capital_expenditure'],
+                eps_growth_rate=financial['eps_growth_rate'],
                 current_price=market_data['current_price'],
                 total_shares=total_shares,
                 dividend_per_share=market_data['dividend_per_share'],

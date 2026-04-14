@@ -42,13 +42,28 @@ class StockScorer:
         if fcf_yield > 3: return 4
         return 2  # 0% 초과 3% 이하
 
-    def calculate_pbr_score(self, pbr):
-        """PBR 점수 산정 (최대 5점)"""
+    def calculate_pbr_score(self, pbr, roe=None):
+        """PBR 점수 산정 (최대 5점)
+        버핏: 고ROE 기업은 장부가치 이상의 프리미엄이 정당화된다.
+        ROE > 20% → PBR 3.0 미만이면 만점, 이상이면 base+3 (최대 5)
+        ROE > 15% → PBR 2.0 미만이면 만점, 이상이면 base+2 (최대 5)
+        ROE ≤ 15% → 기존 기준 그대로
+        """
         if pbr <= 0: return 0
-        if pbr < 0.3: return 5
-        if pbr < 0.6: return 4
-        if pbr < 1.0: return 3
-        return 0  # 1.0 이상
+
+        # 기본 PBR 기준 점수
+        if pbr < 0.3:   base = 5
+        elif pbr < 0.6: base = 4
+        elif pbr < 1.0: base = 3
+        else:           base = 0
+
+        if roe is not None:
+            if roe > 20:
+                return 5 if pbr < 3.0 else min(base + 3, 5)
+            if roe > 15:
+                return 5 if pbr < 2.0 else min(base + 2, 5)
+
+        return base
 
     # ── 카테고리 2: 성장성 및 재무 안전성 (30점) ─────────────────────────────
 
@@ -71,8 +86,7 @@ class StockScorer:
         if peg_ratio < 0.5: return 10
         if peg_ratio < 1.0: return 7
         if peg_ratio < 1.5: return 4
-        if peg_ratio < 2.0: return 2
-        return 0  # 2.0 이상
+        return 0  # 1.5 이상 — Lynch 기준 과대평가 영역
 
     def calculate_debt_ratio_score(self, debt_ratio):
         """부채비율 점수 산정 (최대 10점)
@@ -164,7 +178,7 @@ class StockScorer:
         score_per = self.calculate_per_score(processed.per)
         score_roe = self.calculate_roe_score(processed.roe)
         score_fcf = self.calculate_fcf_score(processed.fcf_yield)
-        score_pbr = self.calculate_pbr_score(processed.pbr)
+        score_pbr = self.calculate_pbr_score(processed.pbr, roe=processed.roe)
 
         # ── 카테고리 2: 성장성 및 재무 안전성 ───────────────────────────────
         score_moat = 0  # 정성 평가 - 현재 0점 처리 (qualitative_assessments 테이블에서 별도 관리)

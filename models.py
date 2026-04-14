@@ -36,6 +36,9 @@ class RawFinancialData(Base):
     dividend_per_share = Column(Float)              # 1주당 연간 배당금 (작년도 확정값)
     dividend_increase_years = Column(Integer, default=0)  # 배당 연속 인상 연수
 
+    # EPS 성장률 (PEG 계산용)
+    eps_growth_rate = Column(Float)  # EPS 연간 성장률(%), US: yfinance earningsGrowth 또는 EPS CAGR
+
     # 자사주
     share_cancel = Column(Boolean, default=False)   # 최근 1년 내 자사주 소각 여부 (매입 제외, 소각만)
     treasury_shares = Column(Float, default=0.0)    # 자사주 보유 수 (ROE 계산 보조용)

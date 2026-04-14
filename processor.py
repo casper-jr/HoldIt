@@ -137,7 +137,12 @@ class FinancialProcessor:
                 and raw_data.total_equity and raw_data.total_equity > 0):
             debt_ratio = (float(raw_data.total_liabilities) / float(raw_data.total_equity)) * 100
 
-        # 7. PEG = PER ÷ EPS 연간 성장률(%)  →  장기 과제, 현재 None 유지
+        # 7. PEG = PER ÷ EPS 연간 성장률(%)
+        #    PER > 0 AND 성장률 > 0 일 때만 의미 있음. 그 외 케이스는 모두 None → scorer 0점 처리.
+        #    (PER<0 적자, 성장률<0 역성장, 양쪽 모두 음수 → 가짜 양수 방지 포함)
+        eps_growth_rate = getattr(raw_data, 'eps_growth_rate', None)
+        if per > 0 and eps_growth_rate is not None and eps_growth_rate > 0:
+            peg_ratio = per / eps_growth_rate
 
         # 8. 배당수익률(%) = (1주당 연간 배당금 / 현재주가) × 100
         if raw_data.current_price and raw_data.current_price > 0:
@@ -177,9 +182,10 @@ class FinancialProcessor:
         roe_str       = f"{roe:.1f}%" if roe is not None else "N/A"
         fcf_yield_str = f"{fcf_yield:.1f}%" if fcf_yield is not None else "N/A"
         debt_str      = f"{debt_ratio:.1f}%" if debt_ratio is not None else "N/A"
+        peg_str       = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A"
         print(
             f"   └─ EPS:{eps:,.0f} | PER:{per:.2f} | PBR:{pbr:.2f} | "
-            f"ROE:{roe_str} | FCF수익률:{fcf_yield_str} | 부채비율:{debt_str} | 배당수익률:{dividend_yield:.2f}%"
+            f"ROE:{roe_str} | FCF수익률:{fcf_yield_str} | 부채비율:{debt_str} | PEG:{peg_str} | 배당수익률:{dividend_yield:.2f}%"
         )
 
 

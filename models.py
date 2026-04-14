@@ -80,6 +80,17 @@ class QualitativeAssessment(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+class FetchHistory(Base):
+    __tablename__ = 'fetch_history'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String, ForeignKey('companies.ticker'))
+    fetch_date = Column(Date, nullable=False)   # 수집 시도 날짜
+    status = Column(String, nullable=False)     # SUCCESS, SKIP_NO_DIVIDEND, FAIL_NO_DATA, ERROR 등
+    message = Column(String)                    # 상세 메시지
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class ScoringResult(Base):
     __tablename__ = 'scoring_results'
 

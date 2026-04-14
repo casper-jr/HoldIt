@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from sqlalchemy import func
 from database import SessionLocal
 from models import Company, RawFinancialData, ProcessedFinancialData
@@ -18,9 +18,9 @@ class FinancialProcessor:
         print("데이터 가공을 시작합니다...")
 
         if today_only:
-            today = date.today()
+            today_utc = datetime.now(timezone.utc).date()
             raw_data_list = self.db.query(RawFinancialData).filter(
-                func.date(RawFinancialData.updated_at) == today
+                func.date(RawFinancialData.updated_at) == today_utc
             ).all()
             if not raw_data_list:
                 print("오늘 업데이트된 원본 데이터가 없습니다.")
@@ -63,14 +63,31 @@ class FinancialProcessor:
 
     def process_single(self, raw_data):
         """
-        단일 Raw 데이터를 바탕으로 EPS, PER, 배당수익률 등을 계산합니다.
-        미국 종목 중 통화 불일치(ADR 등)가 있으면 yfinance 제공 PER/PBR을 사용합니다.
+        단일 Raw 데이터를 바탕으로 각 평가 지표를 계산합니다.
+
+        [카테고리 1] 수익 창출력 및 내재 가치
+          - EPS, PER, PBR: 기존 방식 유지
+          - ROE: 즉시 계산 가능 (net_income + total_equity 이미 수집 중)
+          - FCF, FCF 수익률: operating_cash_flow·capital_expenditure 수집 후 계산 (현재 None)
+
+        [카테고리 2] 성장성 및 재무 안전성
+          - 부채비율: total_liabilities 수집 후 계산 (현재 None)
+          - PEG: EPS 성장률 데이터 확보 후 계산 (현재 None, 장기 과제)
+
+        [카테고리 3] 주주환원
+          - 배당수익률: 기존 방식 유지
+
+        미국 ADR 통화 불일치 종목은 yfinance trailingPE/priceToBook 직접 사용.
         """
         eps = 0.0
         per = 0.0
         pbr = 0.0
+        roe = None
+        fcf = None
+        fcf_yield = None
+        debt_ratio = None
+        peg_ratio = None
         dividend_yield = 0.0
-        treasury_share_ratio = 0.0
 
         # 시장 구분
         company = self.db.query(Company).filter(Company.ticker == raw_data.ticker).first()
@@ -84,13 +101,13 @@ class FinancialProcessor:
         if eps > 0 and raw_data.current_price:
             per = raw_data.current_price / eps
 
-        # 3. PBR (주가순자산비율) 계산
+        # 3. PBR (주가순자산비율) = 현재주가 / BPS
         if raw_data.total_equity and raw_data.total_shares and raw_data.total_shares > 0:
             bps = raw_data.total_equity / raw_data.total_shares
             if bps > 0 and raw_data.current_price:
                 pbr = raw_data.current_price / bps
 
-        # US 종목: 통화 불일치 시 yfinance 제공 PER/PBR 사용 (API 호출 1회로 통합)
+        # US 종목: 통화 불일치(ADR 등) 시 yfinance 제공 PER/PBR 사용
         if not is_kr:
             mismatch, yf_per, yf_pbr = self._get_yfinance_info_if_currency_mismatch(raw_data.ticker)
             if mismatch and (yf_per > 0 or yf_pbr > 0):
@@ -98,44 +115,73 @@ class FinancialProcessor:
                 per = yf_per
                 pbr = yf_pbr
 
-        # 4. 배당수익률(%) = (1주당 연간 배당금 / 현재주가) * 100
+        # 4. ROE (자기자본이익률, %) = (당기순이익 / 자기자본) × 100
+        #    버핏의 핵심 지표. net_income·total_equity 모두 기존 수집 데이터로 즉시 계산 가능.
+        if raw_data.net_income and raw_data.total_equity and raw_data.total_equity > 0:
+            roe = (float(raw_data.net_income) / raw_data.total_equity) * 100
+
+        # 5. FCF (잉여현금흐름) = 영업현금흐름 - CapEx
+        #    FCF 수익률(%) = (FCF / 시가총액) × 100
+        #    fetcher에서 operating_cash_flow·capital_expenditure 수집 후 계산 가능.
+        if (raw_data.operating_cash_flow is not None and raw_data.operating_cash_flow != 0.0
+                or raw_data.capital_expenditure is not None and raw_data.capital_expenditure != 0.0):
+            fcf = float(raw_data.operating_cash_flow or 0) - float(raw_data.capital_expenditure or 0)
+            if raw_data.current_price and raw_data.total_shares and raw_data.total_shares > 0:
+                market_cap = raw_data.current_price * raw_data.total_shares
+                if market_cap > 0:
+                    fcf_yield = (fcf / market_cap) * 100
+
+        # 6. 부채비율(%) = (총부채 / 자기자본) × 100
+        #    fetcher에서 total_liabilities 수집 후 계산 가능.
+        if (raw_data.total_liabilities is not None and raw_data.total_liabilities > 0
+                and raw_data.total_equity and raw_data.total_equity > 0):
+            debt_ratio = (float(raw_data.total_liabilities) / float(raw_data.total_equity)) * 100
+
+        # 7. PEG = PER ÷ EPS 연간 성장률(%)  →  장기 과제, 현재 None 유지
+
+        # 8. 배당수익률(%) = (1주당 연간 배당금 / 현재주가) × 100
         if raw_data.current_price and raw_data.current_price > 0:
             dividend_yield = (raw_data.dividend_per_share / raw_data.current_price) * 100
 
-        # 5. 자사주 보유 비율(%) = (자기주식수 / (유통주식수 + 자기주식수)) * 100
-        if hasattr(raw_data, 'treasury_shares') and raw_data.treasury_shares > 0:
-            total_issued = raw_data.total_shares + raw_data.treasury_shares
-            if total_issued > 0:
-                treasury_share_ratio = (raw_data.treasury_shares / total_issued) * 100
-            
-        # DB에 Processed 데이터 저장 또는 업데이트
+        # ── DB 저장 또는 업데이트 ─────────────────────────────────────────────
         processed = self.db.query(ProcessedFinancialData).filter(
             ProcessedFinancialData.ticker == raw_data.ticker,
             ProcessedFinancialData.record_date == raw_data.record_date
         ).first()
-        
+
+        fields = dict(
+            eps=eps,
+            per=per,
+            pbr=pbr,
+            roe=roe,
+            fcf=fcf,
+            fcf_yield=fcf_yield,
+            debt_ratio=debt_ratio,
+            peg_ratio=peg_ratio,
+            dividend_yield=dividend_yield,
+        )
+
         if processed:
-            processed.eps = eps
-            processed.per = per
-            processed.pbr = pbr
-            processed.dividend_yield = dividend_yield
-            processed.treasury_share_ratio = treasury_share_ratio
+            for k, v in fields.items():
+                setattr(processed, k, v)
             print(f"가공 데이터 업데이트: {raw_data.ticker} ({raw_data.record_date})")
         else:
             processed = ProcessedFinancialData(
                 ticker=raw_data.ticker,
                 record_date=raw_data.record_date,
-                eps=eps,
-                per=per,
-                pbr=pbr,
-                dividend_yield=dividend_yield,
-                cancel_ratio=0.0,
-                treasury_share_ratio=treasury_share_ratio
+                **fields
             )
             self.db.add(processed)
             print(f"가공 데이터 신규 저장: {raw_data.ticker} ({raw_data.record_date})")
-            
-        print(f"   └─ EPS: {eps:,.0f} | PER: {per:.2f}배 | PBR: {pbr:.2f}배 | 배당수익률: {dividend_yield:.2f}% | 자사주비율: {treasury_share_ratio:.2f}%")
+
+        roe_str       = f"{roe:.1f}%" if roe is not None else "N/A"
+        fcf_yield_str = f"{fcf_yield:.1f}%" if fcf_yield is not None else "N/A"
+        debt_str      = f"{debt_ratio:.1f}%" if debt_ratio is not None else "N/A"
+        print(
+            f"   └─ EPS:{eps:,.0f} | PER:{per:.2f} | PBR:{pbr:.2f} | "
+            f"ROE:{roe_str} | FCF수익률:{fcf_yield_str} | 부채비율:{debt_str} | 배당수익률:{dividend_yield:.2f}%"
+        )
+
 
 if __name__ == "__main__":
     processor = FinancialProcessor()

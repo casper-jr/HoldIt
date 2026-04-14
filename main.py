@@ -296,48 +296,97 @@ def show_leaderboard(limit=None, market=None):
 
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
         limit_label = f"Top {limit}" if limit is not None else f"전체 {len(results)}개"
-        print(f"\n{'=' * 160}")
-        print(f"우량주 평가 리더보드 [{market_label}] ({limit_label}) - 정성평가 만점 시 70점 이상 가능한 종목만 표시 (현재 27점 이상)")
-        print(f"{'=' * 160}")
-        
-        # 헤더 출력
-        header = f"{pad_string('순위', 5)} | {pad_string('종목명', 16)} | {pad_string('종목코드', 8)} | {pad_string('정량합계(/57)', 14)} | {pad_string('PER(/20)', 12)} | {pad_string('PBR(/5)', 12)} | {pad_string('배당수익(/10)', 14)} | {pad_string('분기배당(/5)', 12)} | {pad_string('배당인상(/5)', 12)} | {pad_string('자사주비율(/5)', 15)} | {pad_string('매입소각(/7)', 13)}"
+        # 컬럼 너비 (pad_string은 display width 기준)
+        # 각 너비는 max(헤더 표시폭, 데이터 최대 표시폭) + 여유 1~2
+        W = {
+            'rank':       5,   # "순위"=4
+            'name':      14,   # 종목명 (긴 이름 자름)
+            'ticker':     8,   # "종목코드"=8, 최대 6자리/5자
+            'total':     10,   # "총점(/100)"=10
+            'per':       11,   # "PER(/10)"=8, "999.9(10점)"=10
+            'roe':       13,   # "ROE(/15)"=8, "-99.9%(15점)"=12
+            'fcf':       13,   # "FCF(/10)"=8, "-99.9%(10점)"=12
+            'pbr':       11,   # "PBR(/5)"=7, "99.99(5점)"=10
+            'peg':       10,   # "PEG(/10)"=8, "9.9(10점)"=9
+            'debt':      14,   # "부채비율(/10)"=13, "999%(10점)"=10
+            'div_yield': 14,   # "배당수익(/10)"=13, "99.9%(10점)"=11
+            'div_growth':14,   # "배당성장(/10)"=13, "100년(10점)"=11
+            'cancel':     9,   # "소각(/10)"=9, "X(10점)"=7
+            'moat':       9,   # "해자(/10)"=9, "-(0점)"=6  ← 정성, 맨 오른쪽
+        }
+        SEP = " | "
+        LINE_W = sum(W.values()) + len(SEP) * (len(W) - 1)
+
+        print(f"\n{'=' * LINE_W}")
+        print(f"우량주 평가 리더보드 [{market_label}] ({limit_label})")
+        print(f"{'=' * LINE_W}")
+
+        # 헤더 출력 (정량 순서: PER ROE FCF PBR PEG 부채비율 배당수익 배당성장 소각 | 정성: 해자)
+        header = SEP.join([
+            pad_string('순위',        W['rank']),
+            pad_string('종목명',      W['name']),
+            pad_string('종목코드',    W['ticker']),
+            pad_string('총점(/100)',  W['total']),
+            pad_string('PER(/10)',    W['per']),
+            pad_string('ROE(/15)',    W['roe']),
+            pad_string('FCF(/10)',    W['fcf']),
+            pad_string('PBR(/5)',     W['pbr']),
+            pad_string('PEG(/10)',    W['peg']),
+            pad_string('부채비율(/10)', W['debt']),
+            pad_string('배당수익(/10)', W['div_yield']),
+            pad_string('배당성장(/10)', W['div_growth']),
+            pad_string('소각(/10)',   W['cancel']),
+            pad_string('해자(/10)',   W['moat']),
+        ])
         print(header)
-        print("-" * 160)
+        print("-" * LINE_W)
 
         for i, (score, company_name) in enumerate(results, 1):
-            # 실제 값을 가져오기 위해 Raw, Processed 데이터 조회
             raw = db.query(RawFinancialData).filter(RawFinancialData.ticker == score.ticker).order_by(RawFinancialData.record_date.desc()).first()
             processed = db.query(ProcessedFinancialData).filter(ProcessedFinancialData.ticker == score.ticker).order_by(ProcessedFinancialData.record_date.desc()).first()
 
-            # 값 포맷팅 (예: 12.3(5점))
-            per_str = f"{processed.per:.1f} ({score.score_per}점)" if processed and processed.per > 0 else f"-({score.score_per}점)"
-            pbr_str = f"{processed.pbr:.2f} ({score.score_pbr}점)" if processed and processed.pbr > 0 else f"-({score.score_pbr}점)"
-            div_yield_str = f"{processed.dividend_yield:.1f}%({score.score_div_yield}점)" if processed else f"-({score.score_div_yield}점)"
-
-            q_div_str = f"{'O' if raw and raw.quarterly_dividend else 'X'}({score.score_div_quarter}점)"
-            div_inc_str = f"{raw.dividend_increase_years}년({score.score_div_inc}점)" if raw else f"-({score.score_div_inc}점)"
-
-            treasury_str = f"{processed.treasury_share_ratio:.2f}%({score.score_treasury_ratio}점)" if processed else f"-({score.score_treasury_ratio}점)"
-            buyback_str = f"{'O' if raw and raw.share_buyback_cancel else 'X'}({score.score_buyback}점)"
+            per_str      = f"{processed.per:.1f}({score.score_per}점)"          if processed and processed.per and processed.per > 0 else f"-({score.score_per}점)"
+            roe_str      = f"{processed.roe:.1f}%({score.score_roe}점)"          if processed and processed.roe is not None               else f"-({score.score_roe}점)"
+            fcf_str      = f"{processed.fcf_yield:.1f}%({score.score_fcf}점)"   if processed and processed.fcf_yield is not None           else f"-({score.score_fcf}점)"
+            pbr_str      = f"{processed.pbr:.2f}({score.score_pbr}점)"          if processed and processed.pbr and processed.pbr > 0       else f"-({score.score_pbr}점)"
+            peg_str      = f"{processed.peg_ratio:.1f}({score.score_peg}점)"    if processed and processed.peg_ratio                       else f"-({score.score_peg}점)"
+            debt_str     = f"{processed.debt_ratio:.0f}%({score.score_debt_ratio}점)" if processed and processed.debt_ratio is not None     else f"-({score.score_debt_ratio}점)"
+            div_yield_str= f"{processed.dividend_yield:.1f}%({score.score_div_yield}점)" if processed                                       else f"-({score.score_div_yield}점)"
+            div_growth_str=f"{raw.dividend_increase_years}년({score.score_div_growth}점)" if raw                                            else f"-({score.score_div_growth}점)"
+            cancel_str   = f"{'O' if raw and raw.share_cancel else 'X'}({score.score_cancel}점)"
+            moat_str     = f"-({score.score_moat}점)"
 
             # 종목명이 너무 길면 자르기 (한글 너비 고려)
             name_display = company_name
-            if get_display_width(name_display) > 14:
-                temp_width = 0
-                temp_name = ""
+            if get_display_width(name_display) > W['name']:
+                temp_width, temp_name = 0, ""
                 for char in name_display:
                     w = 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
-                    if temp_width + w > 11:
+                    if temp_width + w > W['name'] - 3:
                         break
                     temp_name += char
                     temp_width += w
                 name_display = temp_name + "..."
 
-            row = f"{pad_string(i, 5)} | {pad_string(name_display, 16)} | {pad_string(score.ticker, 8)} | {pad_string(score.total_score, 14)} | {pad_string(per_str, 12)} | {pad_string(pbr_str, 12)} | {pad_string(div_yield_str, 14)} | {pad_string(q_div_str, 12)} | {pad_string(div_inc_str, 12)} | {pad_string(treasury_str, 15)} | {pad_string(buyback_str, 13)}"
+            row = SEP.join([
+                pad_string(i,             W['rank']),
+                pad_string(name_display,  W['name']),
+                pad_string(score.ticker,  W['ticker']),
+                pad_string(score.total_score, W['total']),
+                pad_string(per_str,       W['per']),
+                pad_string(roe_str,       W['roe']),
+                pad_string(fcf_str,       W['fcf']),
+                pad_string(pbr_str,       W['pbr']),
+                pad_string(peg_str,       W['peg']),
+                pad_string(debt_str,      W['debt']),
+                pad_string(div_yield_str, W['div_yield']),
+                pad_string(div_growth_str,W['div_growth']),
+                pad_string(cancel_str,    W['cancel']),
+                pad_string(moat_str,      W['moat']),
+            ])
             print(row)
 
-        print("=" * 160 + "\n")
+        print("=" * LINE_W + "\n")
     finally:
         db.close()
 
@@ -374,30 +423,42 @@ def show_results(ticker):
         print(f"  - 현재 주가: {price_fmt(raw.current_price)}")
         print(f"  - 당기순이익: {price_fmt(raw.net_income)}")
         print(f"  - 자본총계(순자산): {price_fmt(raw.total_equity)}")
+        print(f"  - 총부채: {price_fmt(raw.total_liabilities)}")
+        print(f"  - 영업활동현금흐름: {price_fmt(raw.operating_cash_flow)}")
+        print(f"  - 설비투자(CapEx): {price_fmt(raw.capital_expenditure)}")
         print(f"  - 총 유통주식수: {raw.total_shares:,.0f} 주 (자사주 제외)")
         print(f"  - 자기주식수(자사주): {raw.treasury_shares:,.0f} 주")
         print(f"  - 1주당 연간 배당금: {price_fmt(raw.dividend_per_share)}")
-        print(f"  - 분기 배당 실시: {'예' if raw.quarterly_dividend else '아니오'}")
         print(f"  - 배당 연속 인상: {raw.dividend_increase_years} 년")
-        print(f"  - 정기적 자사주 매입 및 소각: {'예' if raw.share_buyback_cancel else '아니오'}\n")
+        print(f"  - 최근 1년 내 자사주 소각: {'예' if raw.share_cancel else '아니오'}\n")
 
         print("2️⃣ [가공된 평가 지표 (Processed Data)]")
         print(f"  - EPS (주당순이익): {price_fmt(processed.eps)} (당기순이익 / 유통주식수)")
         print(f"  - PER (주가수익비율): {processed.per:.2f} 배 (현재주가 / EPS)")
+        print(f"  - ROE (자기자본이익률): {processed.roe:.2f} % (당기순이익 / 자본총계 × 100)" if processed.roe is not None else "  - ROE (자기자본이익률): -")
+        print(f"  - FCF (잉여현금흐름): {price_fmt(processed.fcf)} (영업현금흐름 - CapEx)" if processed.fcf is not None else "  - FCF (잉여현금흐름): -")
+        print(f"  - FCF 수익률: {processed.fcf_yield:.2f} % (FCF / 시가총액 × 100)" if processed.fcf_yield is not None else "  - FCF 수익률: -")
         print(f"  - PBR (주가순자산비율): {processed.pbr:.2f} 배 (현재주가 / BPS)")
-        print(f"  - 배당수익률: {processed.dividend_yield:.2f} % (주당배당금 / 현재주가 * 100)")
-        print(f"  - 자사주 보유 비율: {processed.treasury_share_ratio:.2f} % (자사주 / 총발행주식수 * 100)\n")
+        print(f"  - PEG 비율: {processed.peg_ratio:.2f}" if processed.peg_ratio else "  - PEG 비율: - (데이터 미확보)")
+        print(f"  - 부채비율: {processed.debt_ratio:.2f} % (총부채 / 자본총계 × 100)" if processed.debt_ratio is not None else "  - 부채비율: -")
+        print(f"  - 배당수익률: {processed.dividend_yield:.2f} % (주당배당금 / 현재주가 × 100)\n")
 
         print("3️⃣ [최종 평가 점수 (Scoring Results)]")
-        print(f"  - PER 점수: {score.score_per} / 20 점")
-        print(f"  - PBR 점수: {score.score_pbr} / 5 점")
-        print(f"  - 배당수익률 점수: {score.score_div_yield} / 10 점")
-        print(f"  - 분기 배당 점수: {score.score_div_quarter} / 5 점")
-        print(f"  - 배당 인상 점수: {score.score_div_inc} / 5 점")
-        print(f"  - 자사주 비율 점수: {score.score_treasury_ratio} / 5 점")
-        print(f"  - 자사주 매입/소각 점수: {score.score_buyback} / 7 점")
+        print(f"  [카테고리 1: 수익 창출력 및 내재 가치 — 40점]")
+        print(f"  - PER 점수:         {score.score_per:>3} / 10 점")
+        print(f"  - ROE 점수:         {score.score_roe:>3} / 15 점")
+        print(f"  - FCF 점수:         {score.score_fcf:>3} / 10 점")
+        print(f"  - PBR 점수:         {score.score_pbr:>3} / 5 점")
+        print(f"  [카테고리 2: 성장성 및 재무 안전성 — 30점]")
+        print(f"  - 경제적 해자 점수: {score.score_moat:>3} / 10 점  (정성, 현재 0점 고정)")
+        print(f"  - PEG 점수:         {score.score_peg:>3} / 10 점")
+        print(f"  - 부채비율 점수:    {score.score_debt_ratio:>3} / 10 점")
+        print(f"  [카테고리 3: 주주환원 정책 — 30점]")
+        print(f"  - 배당수익률 점수:  {score.score_div_yield:>3} / 10 점")
+        print(f"  - 배당성장성 점수:  {score.score_div_growth:>3} / 10 점")
+        print(f"  - 자사주 소각 점수: {score.score_cancel:>3} / 10 점")
         print("  --------------------------------------")
-        print(f"  - 정량적 합계: {score.total_score} 점 (정성적 평가 0점 처리 중)")
+        print(f"  - 합계: {score.total_score} 점 / 100 점  (경제적 해자 정성 입력 시 최대 100점)")
         # print(f"  - 최종 투자 등급: [{score.grade}] 등급\n")
 
     finally:
@@ -448,19 +509,22 @@ def export_data(market=None):
             writer = csv.writer(f)
 
             # 헤더 작성
-            # A~D: 종목 정보 | E~R: 정량 항목(값+점수) | S~X: 정성 항목(빈칸) | Y: 정량합계 | Z: 정성합계 | AA: 최종점수 | AB: 메모
+            # A~D: 종목 정보 | E~V: 정량 항목(값+점수) | W: 정량합계 | X: 경제적 해자(정성 입력란) | Y: 최종예상점수(수식) | Z: 메모
             headers = [
-                '순위', '종목명', '종목코드', '시장',                              # A~D
-                'PER', 'PER점수(/20)', 'PBR', 'PBR점수(/5)',                       # E~H
-                '배당수익률(%)', '배당수익률점수(/10)',                              # I~J
-                '분기배당', '분기배당점수(/5)',                                      # K~L
-                '배당연속인상(년)', '배당인상점수(/5)',                              # M~N
-                '자사주비율(%)', '자사주비율점수(/5)',                               # O~P
-                '자사주매입소각', '매입소각점수(/7)',                                # Q~R
-                '이익_지속가능성(5)', '중복_상장여부(5)', '연간_소각비율(8)',       # S~U
-                '미래_성장잠재력(10)', '기업_경영(10)', '세계적_브랜드(5)',         # V~X
-                '정량합계', '정성합계', '최종점수',                                  # Y~AA
-                '메모'                                                               # AB
+                '순위', '종목명', '종목코드', '시장',           # A~D
+                'PER', 'PER점수(/10)',                           # E~F
+                'ROE(%)', 'ROE점수(/15)',                        # G~H
+                'FCF수익률(%)', 'FCF점수(/10)',                  # I~J
+                'PBR', 'PBR점수(/5)',                            # K~L
+                'PEG', 'PEG점수(/10)',                           # M~N
+                '부채비율(%)', '부채비율점수(/10)',              # O~P
+                '배당수익률(%)', '배당수익률점수(/10)',          # Q~R
+                '배당성장연수(년)', '배당성장점수(/10)',         # S~T
+                '소각여부', '소각점수(/10)',                     # U~V
+                '정량합계',                                      # W
+                '경제적해자(0~10직접입력)',                      # X (정성 입력란)
+                '최종예상점수',                                  # Y (수식)
+                '메모'                                           # Z
             ]
             writer.writerow(headers)
 
@@ -472,32 +536,35 @@ def export_data(market=None):
                 company = db.query(Company).filter(Company.ticker == score.ticker).first()
                 market_name = company.market if company else ''
 
-                per_val = f"{processed.per:.1f}" if processed and processed.per > 0 else '-'
-                pbr_val = f"{processed.pbr:.2f}" if processed and processed.pbr > 0 else '-'
+                per_val = f"{processed.per:.1f}" if processed and processed.per and processed.per > 0 else '-'
+                roe_val = f"{processed.roe:.1f}" if processed and processed.roe is not None else '-'
+                fcf_yield_val = f"{processed.fcf_yield:.1f}" if processed and processed.fcf_yield is not None else '-'
+                pbr_val = f"{processed.pbr:.2f}" if processed and processed.pbr and processed.pbr > 0 else '-'
+                peg_val = f"{processed.peg_ratio:.2f}" if processed and processed.peg_ratio else '-'
+                debt_val = f"{processed.debt_ratio:.1f}" if processed and processed.debt_ratio is not None else '-'
                 div_yield_val = f"{processed.dividend_yield:.1f}" if processed else '-'
-                q_div_val = 'O' if raw and raw.quarterly_dividend else 'X'
-                div_inc_val = raw.dividend_increase_years if raw else '-'
-                treasury_val = f"{processed.treasury_share_ratio:.1f}" if processed else '-'
-                buyback_val = 'O' if raw and raw.share_buyback_cancel else 'X'
+                div_growth_val = raw.dividend_increase_years if raw else '-'
+                cancel_val = 'O' if raw and raw.share_cancel else 'X'
 
-                # 엑셀 수식
-                # 정성합계(Z열): 정성 항목 6개(S~X) 합산
-                # 최종점수(AA열): 정량합계(Y) + 정성합계(Z)
+                # 최종예상점수(Y열) = 정량합계(W열) + 경제적해자 입력값(X열)
                 row_num = i + 1
-                qualitative_sum = f"=SUM(S{row_num}:X{row_num})"
-                total_formula = f"=Y{row_num}+Z{row_num}"
+                total_formula = f"=W{row_num}+X{row_num}"
 
                 row = [
-                    i, name, score.ticker, market_name,                 # A~D
-                    per_val, score.score_per, pbr_val, score.score_pbr, # E~H
-                    div_yield_val, score.score_div_yield,                # I~J
-                    q_div_val, score.score_div_quarter,                  # K~L
-                    div_inc_val, score.score_div_inc,                    # M~N
-                    treasury_val, score.score_treasury_ratio,            # O~P
-                    buyback_val, score.score_buyback,                    # Q~R
-                    '', '', '', '', '', '',                               # S~X (정성, 빈칸)
-                    score.total_score, qualitative_sum, total_formula,   # Y~AA
-                    ''                                                    # AB (메모)
+                    i, name, score.ticker, market_name,                                 # A~D
+                    per_val, score.score_per,                                            # E~F
+                    roe_val, score.score_roe,                                            # G~H
+                    fcf_yield_val, score.score_fcf,                                     # I~J
+                    pbr_val, score.score_pbr,                                            # K~L
+                    peg_val, score.score_peg,                                            # M~N
+                    debt_val, score.score_debt_ratio,                                    # O~P
+                    div_yield_val, score.score_div_yield,                                # Q~R
+                    div_growth_val, score.score_div_growth,                              # S~T
+                    cancel_val, score.score_cancel,                                      # U~V
+                    score.total_score,                                                   # W (정량합계)
+                    '',                                                                  # X (정성 입력란)
+                    total_formula,                                                       # Y (최종예상점수)
+                    ''                                                                   # Z (메모)
                 ]
                 writer.writerow(row)
                 
@@ -505,8 +572,8 @@ def export_data(market=None):
         print(f"\n========================================")
         print(f"데이터 내보내기 완료: {filename}")
         print(f"   - 대상: {market_label} / 총 {len(results)}개 종목 (정량점수 27점 이상)")
-        print(f"   - 엑셀에서 파일을 열어 E열~J열에 정성적 평가 점수를 기입하시면,")
-        print(f"   - K열(최종_예상점수)에 총점이 자동으로 계산됩니다!")
+        print(f"   - 엑셀에서 파일을 열어 X열(경제적해자)에 0~10 점수를 기입하시면,")
+        print(f"   - Y열(최종예상점수)에 총점이 자동으로 계산됩니다!")
         print(f"========================================\n")
         
     finally:

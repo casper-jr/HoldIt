@@ -23,7 +23,7 @@ def _handle_sigint(sig, frame):
     print("\n\n중단 요청됨. 현재 종목 처리 후 중단합니다... (한번 더 누르면 즉시 중단)")
 from sqlalchemy import func as sa_func
 from processor import FinancialProcessor
-from scorer import StockScorer
+from scorer import get_scorer, StockScorer
 from database import SessionLocal
 from models import Company, RawFinancialData, ProcessedFinancialData, ScoringResult, FetchHistory
 
@@ -218,17 +218,19 @@ def process_data(all_data=False):
     processor = FinancialProcessor()
     processor.process_all(today_only=not all_data)
 
-def score_data(all_data=False):
+def score_data(all_data=False, scorer_version='v2'):
     """
     3단계: 가공된 지표를 바탕으로 점수와 등급을 계산하여 DB(ScoringResult)에 저장합니다.
     all_data=False (기본값): 오늘 처리된 종목만 채점
     all_data=True         : DB 전체 재채점
+    scorer_version        : 'v1' 또는 'v2' (기본값 'v2')
     """
     print(f"\n========================================")
     print(f"[3단계: 평가] 가공 지표를 바탕으로 점수 산정 시작" + (" (전체)" if all_data else " (오늘 업데이트분)"))
+    print(f"   scorer 버전: {scorer_version}")
     print(f"========================================\n")
 
-    scorer = StockScorer()
+    scorer = get_scorer(scorer_version)
     scorer.score_all(today_only=not all_data)
 
 def get_display_width(s):
@@ -256,27 +258,30 @@ def pad_string(s, total_width):
         return s + " " * padding
     return s
 
-def show_leaderboard(limit=None, market=None):
+def show_leaderboard(limit=None, market=None, scorer_version='v2'):
     """
     4단계: DB에 저장된 평가 결과를 총점 기준으로 내림차순 정렬하여 출력합니다.
     (정성평가 만점 43점을 받아도 70점(B등급) 미만인 종목은 제외합니다. 즉, 현재 점수 27점 이상만 표시)
     limit: 출력할 최대 종목 수. None이면 임계값(27점) 이상 전체 출력.
     market: 'kr'이면 한국 종목만, 'us'이면 미국 종목만, None이면 전체
+    scorer_version: 'v1' 또는 'v2' (기본값 'v2')
     """
     KR_MARKETS = ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
 
     db = SessionLocal()
     # 정성 평가 총점인 43점을 모두 획득했을 때의 점수 기준 필터링(이후 필요시 ScoringResult.total_score >= 의 값 수정하여 사용)
     try:
-        # 종목당 가장 최근 평가 결과만 가져오기 위한 서브쿼리
+        # 종목당 버전별 가장 최근 평가 결과만 가져오기 위한 서브쿼리
         latest_score = db.query(
             ScoringResult.ticker,
             sa_func.max(ScoringResult.score_date).label('max_date')
-        ).group_by(ScoringResult.ticker).subquery()
+        ).filter(ScoringResult.scorer_version == scorer_version)\
+         .group_by(ScoringResult.ticker).subquery()
 
         query = db.query(ScoringResult, Company.name)\
             .join(Company, ScoringResult.ticker == Company.ticker)\
             .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
+            .filter(ScoringResult.scorer_version == scorer_version)\
             .filter(ScoringResult.total_score >= 27)
 
         # 시장 필터링
@@ -296,6 +301,7 @@ def show_leaderboard(limit=None, market=None):
 
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
         limit_label = f"Top {limit}" if limit is not None else f"전체 {len(results)}개"
+        scorer_label = f"scorer {scorer_version}"
         # 컬럼 너비 (pad_string은 display width 기준)
         # 각 너비는 max(헤더 표시폭, 데이터 최대 표시폭) + 여유 1~2
         W = {
@@ -318,7 +324,7 @@ def show_leaderboard(limit=None, market=None):
         LINE_W = sum(W.values()) + len(SEP) * (len(W) - 1)
 
         print(f"\n{'=' * LINE_W}")
-        print(f"우량주 평가 리더보드 [{market_label}] ({limit_label})")
+        print(f"우량주 평가 리더보드 [{market_label}] ({limit_label}) [{scorer_label}]")
         print(f"{'=' * LINE_W}")
 
         # 헤더 출력 (정량 순서: PER ROE FCF PBR PEG 부채비율 배당수익 배당성장 소각 | 정성: 해자)
@@ -620,21 +626,38 @@ if __name__ == "__main__":
 
         elif command == "score":
             all_flag = '--all' in sys.argv
-            score_data(all_flag)
+            # --scorer v1|v2 플래그 파싱
+            scorer_ver = 'v2'
+            if '--scorer' in sys.argv:
+                idx = sys.argv.index('--scorer')
+                if idx + 1 < len(sys.argv):
+                    scorer_ver = sys.argv[idx + 1]
+            score_data(all_flag, scorer_version=scorer_ver)
             
         elif command == "view":
             # view / view 50 / view kr / view us / view kr 50 / view us 50
+            # --scorer v1|v2 플래그 지원 (기본값 v2)
             # 개수를 지정하지 않으면 임계값(27점) 이상 전체 출력
+            scorer_ver = 'v2'
+            view_args = sys.argv[2:]
+            if '--scorer' in view_args:
+                idx = view_args.index('--scorer')
+                if idx + 1 < len(view_args):
+                    scorer_ver = view_args[idx + 1]
+                    view_args = [a for i, a in enumerate(view_args) if i != idx and i != idx + 1]
+                else:
+                    view_args = [a for i, a in enumerate(view_args) if i != idx]
+
             market = None
             limit = None
-            if len(sys.argv) > 2:
-                arg2 = sys.argv[2].lower()
+            if view_args:
+                arg2 = view_args[0].lower()
                 if arg2 in ('kr', 'us'):
                     market = arg2
-                    limit = int(sys.argv[3]) if len(sys.argv) > 3 else None
+                    limit = int(view_args[1]) if len(view_args) > 1 else None
                 else:
                     limit = int(arg2)
-            show_leaderboard(limit, market)
+            show_leaderboard(limit, market, scorer_version=scorer_ver)
             
         elif command == "detail":
             target_ticker = sys.argv[2] if len(sys.argv) > 2 else '005930'

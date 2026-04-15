@@ -502,6 +502,8 @@ class DartFetcher:
             total_equity = 0.0
             total_liabilities = 0.0
             operating_cash_flow = 0.0
+            net_income_prev = None   # 전년도 당기순이익 (frmtrm) — EPS 성장률용
+            net_income_prev2 = None  # 전전년도 당기순이익 (lwfr)   — 2년 CAGR 시도용
 
             # 재무상태표 항목 파싱 (최근 분기 기준): 자본총계, 부채총계
             for item in latest_data_list:
@@ -527,22 +529,54 @@ class DartFetcher:
             if annual_data_list:
                 for item in annual_data_list:
                     account_nm = item.get('account_nm', '').replace(' ', '')
-                    try:
-                        amount = float(item.get('thstrm_amount', '0').replace(',', ''))
-                    except ValueError:
+                    fs_div = item.get('fs_div')
+
+                    def _parse_amount(key):
+                        raw = item.get(key, '') or ''
+                        try:
+                            return float(raw.replace(',', ''))
+                        except ValueError:
+                            return None
+
+                    thstrm = _parse_amount('thstrm_amount')
+                    frmtrm = _parse_amount('frmtrm_amount')
+                    lwfr   = _parse_amount('lwfr_amount')
+
+                    if thstrm is None:
                         continue
 
                     if '당기순이익' in account_nm or '당기순손실' in account_nm:
-                        if item.get('fs_div') == 'CFS':
-                            net_income = amount
-                        elif item.get('fs_div') == 'OFS' and net_income == 0.0:
-                            net_income = amount
+                        if fs_div == 'CFS':
+                            net_income = thstrm
+                            if frmtrm is not None:
+                                net_income_prev = frmtrm
+                            if lwfr is not None:
+                                net_income_prev2 = lwfr
+                        elif fs_div == 'OFS' and net_income == 0.0:
+                            net_income = thstrm
+                            if net_income_prev is None and frmtrm is not None:
+                                net_income_prev = frmtrm
+                            if net_income_prev2 is None and lwfr is not None:
+                                net_income_prev2 = lwfr
 
                     if '영업활동' in account_nm and '현금흐름' in account_nm:
-                        if item.get('fs_div') == 'CFS':
-                            operating_cash_flow = amount
-                        elif item.get('fs_div') == 'OFS' and operating_cash_flow == 0.0:
-                            operating_cash_flow = amount
+                        if fs_div == 'CFS':
+                            operating_cash_flow = thstrm
+                        elif fs_div == 'OFS' and operating_cash_flow == 0.0:
+                            operating_cash_flow = thstrm
+
+            # EPS 성장률(YoY 또는 2년 CAGR) 계산
+            # 유효 조건: 당해·비교 연도 모두 양수 (적자 포함 시 의미 없는 성장률 방지)
+            eps_growth_rate = None
+            if net_income > 0:
+                if net_income_prev2 is not None and net_income_prev2 > 0:
+                    # 2년 CAGR: (현재 / 2년전) ** (1/2) - 1
+                    eps_growth_rate = ((net_income / net_income_prev2) ** 0.5 - 1) * 100
+                    print(f"   └─ EPS 성장률(2년 CAGR): {eps_growth_rate:.1f}%")
+                elif net_income_prev is not None and net_income_prev > 0:
+                    # 1년 YoY: (현재 / 전년) - 1
+                    eps_growth_rate = (net_income / net_income_prev - 1) * 100
+                    print(f"   └─ EPS 성장률(1년 YoY): {eps_growth_rate:.1f}%")
 
             # CapEx(유형자산의 취득) - 사업보고서 전체 재무제표에서 별도 조회
             capital_expenditure = self.get_capex_dart(
@@ -611,6 +645,7 @@ class DartFetcher:
                 total_liabilities=total_liabilities,
                 operating_cash_flow=operating_cash_flow,
                 capital_expenditure=capital_expenditure,
+                eps_growth_rate=eps_growth_rate,
                 current_price=market_data['current_price'],
                 total_shares=market_data['total_shares'],
                 dividend_per_share=market_data['dividend_per_share'],

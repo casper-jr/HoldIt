@@ -118,6 +118,7 @@ class ScoringResult(Base):
     score_cancel = Column(Integer, default=0)      # 자사주 소각 실적, 최대 10점
 
     total_score = Column(Integer, default=0)
-    grade = Column(String)  # A, B, C, D
+    grade = Column(String)       # A, B, C, D
+    scorer_version = Column(String, default='v2')  # 사용된 scorer 버전
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())

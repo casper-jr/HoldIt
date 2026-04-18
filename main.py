@@ -261,15 +261,14 @@ def pad_string(s, total_width):
 def show_leaderboard(limit=None, market=None, scorer_version='v2'):
     """
     4단계: DB에 저장된 평가 결과를 총점 기준으로 내림차순 정렬하여 출력합니다.
-    (정성평가 만점 43점을 받아도 70점(B등급) 미만인 종목은 제외합니다. 즉, 현재 점수 27점 이상만 표시)
-    limit: 출력할 최대 종목 수. None이면 임계값(27점) 이상 전체 출력.
+    D등급(50점 미만) 종목은 제외합니다.
+    limit: 출력할 최대 종목 수. None이면 C등급 이상 전체 출력.
     market: 'kr'이면 한국 종목만, 'us'이면 미국 종목만, None이면 전체
     scorer_version: 'v1' 또는 'v2' (기본값 'v2')
     """
     KR_MARKETS = ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
 
     db = SessionLocal()
-    # 정성 평가 총점인 43점을 모두 획득했을 때의 점수 기준 필터링(이후 필요시 ScoringResult.total_score >= 의 값 수정하여 사용)
     try:
         # 종목당 버전별 가장 최근 평가 결과만 가져오기 위한 서브쿼리
         latest_score = db.query(
@@ -282,7 +281,7 @@ def show_leaderboard(limit=None, market=None, scorer_version='v2'):
             .join(Company, ScoringResult.ticker == Company.ticker)\
             .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
             .filter(ScoringResult.scorer_version == scorer_version)\
-            .filter(ScoringResult.total_score >= 27)
+            .filter(ScoringResult.total_score >= 40)  # 정성 만점(10점) 합산 시 C등급(50점) 미만 제외
 
         # 시장 필터링
         if market == 'kr':
@@ -296,7 +295,7 @@ def show_leaderboard(limit=None, market=None, scorer_version='v2'):
         results = query.all()
 
         if not results:
-            print("표시할 평가 결과가 없습니다. (27점 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
+            print("표시할 평가 결과가 없습니다. (C등급 이상인 종목이 없거나 평가를 진행하지 않았습니다.)")
             return
 
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
@@ -472,7 +471,7 @@ def show_results(ticker):
 
 def export_data(market=None):
     """
-    5단계: 정성적 평가를 수행할 수 있도록 현재 27점 이상인 종목들을 CSV(엑셀 호환) 파일로 내보냅니다.
+    5단계: 정성적 평가를 수행할 수 있도록 C등급 이상(D등급 제외) 종목들을 CSV(엑셀 호환) 파일로 내보냅니다.
     market: 'kr'이면 한국 종목만, 'us'이면 미국 종목만, None이면 전체
     """
     KR_MARKETS = ('KOSPI', 'KOSDAQ', 'KOSPI/KOSDAQ')
@@ -488,7 +487,7 @@ def export_data(market=None):
         query = db.query(ScoringResult, Company.name)\
             .join(Company, ScoringResult.ticker == Company.ticker)\
             .join(latest_score, (ScoringResult.ticker == latest_score.c.ticker) & (ScoringResult.score_date == latest_score.c.max_date))\
-            .filter(ScoringResult.total_score >= 27)
+            .filter(ScoringResult.total_score >= 40)  # 정성 만점(10점) 합산 시 C등급(50점) 미만 제외
 
         # 시장 필터링
         if market == 'kr':
@@ -499,7 +498,7 @@ def export_data(market=None):
         results = query.order_by(ScoringResult.total_score.desc()).all()
 
         if not results:
-            print("내보낼 데이터가 없습니다. (27점 이상인 종목이 없습니다.)")
+            print("내보낼 데이터가 없습니다. (C등급 이상인 종목이 없습니다.)")
             return
 
         # export 폴더 생성 (없으면)
@@ -577,7 +576,7 @@ def export_data(market=None):
         market_label = "한국(KR)" if market == 'kr' else "미국(US)" if market == 'us' else "전체(KR+US)"
         print(f"\n========================================")
         print(f"데이터 내보내기 완료: {filename}")
-        print(f"   - 대상: {market_label} / 총 {len(results)}개 종목 (정량점수 27점 이상)")
+        print(f"   - 대상: {market_label} / 총 {len(results)}개 종목 (C등급 이상)")
         print(f"   - 엑셀에서 파일을 열어 X열(경제적해자)에 0~10 점수를 기입하시면,")
         print(f"   - Y열(최종예상점수)에 총점이 자동으로 계산됩니다!")
         print(f"========================================\n")
@@ -637,7 +636,7 @@ if __name__ == "__main__":
         elif command == "view":
             # view / view 50 / view kr / view us / view kr 50 / view us 50
             # --scorer v1|v2 플래그 지원 (기본값 v2)
-            # 개수를 지정하지 않으면 임계값(27점) 이상 전체 출력
+            # 개수를 지정하지 않으면 C등급 이상 전체 출력
             scorer_ver = 'v2'
             view_args = sys.argv[2:]
             if '--scorer' in view_args:

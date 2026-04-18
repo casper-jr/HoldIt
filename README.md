@@ -20,14 +20,14 @@ The scoring model is designed to filter out value traps (low PER but no growth) 
 
 ## Tech Stack
 
-| Component | Technology |
-|---|---|
-| Language | Python 3.11+ |
-| Database | PostgreSQL (via Docker) |
-| ORM | SQLAlchemy 2.0 |
-| KR Data Source | [DART Open API](https://opendart.fss.or.kr) + FinanceDataReader |
-| US Data Source | yfinance (screener, financials, dividends) |
-| Containerization | Docker Compose |
+| Component | Technology                                                           |
+|---|----------------------------------------------------------------------|
+| Language | Python 3.11+                                                         |
+| Database | PostgreSQL — Supabase (production / CI) · Docker Compose (local dev) |
+| ORM | SQLAlchemy 2.0                                                       |
+| KR Data Source | [DART Open API](https://opendart.fss.or.kr) + FinanceDataReader      |
+| US Data Source | yfinance (screener, financials, dividends)                           |
+| CI/CD | GitHub Actions (weekly scheduled export for qualitative assessment)  |
 
 ---
 
@@ -77,10 +77,10 @@ Total score is **100 points**, divided into three categories.
 
 The scorer is versioned and swappable via a factory pattern, allowing comparison between different evaluation frameworks without affecting existing data.
 
-| Version | Description | Max Quantitative Score |
-|---|---|---|
+| Version | Description                       | Max Quantitative Score |
+|---|-----------------------------------|---|
 | `v1` | Legacy — PER/PBR/dividend focused | 47pts |
-| `v2` | Current — Full Buffett & Lynch model | 90pts (+ 10pts qualitative) |
+| `v2` | Current — Lynch's PEG added model | 90pts (+ 10pts qualitative) |
 
 - Each version is stored independently in the `scoring_results` table via a `scorer_version` column.
 - To add a new version: create `scorers/vN.py` inheriting `ScorerBase`, then register it in `scorers/__init__.py`'s `_SCORERS` dict.
@@ -159,8 +159,8 @@ Output is a year-by-year comparison table covering all metrics and per-category 
 
 ### Prerequisites
 - Python 3.11+
-- Docker and Docker Compose
 - [DART API key](https://opendart.fss.or.kr/intro/main.do) (for Korean stocks)
+- PostgreSQL — Supabase project **or** Docker Compose for local dev
 
 ### 1. Clone and install dependencies
 
@@ -176,14 +176,22 @@ Create a `.env` file in the project root:
 
 ```env
 DART_API_KEY=your_dart_api_key_here
-DB_URL=postgresql://user:password@localhost:5432/holdit
+DB_HOST=your_db_host
+DB_PORT=5432
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=your_db_name
 ```
 
 ### 3. Start the database
 
+**Option A — Local (Docker):**
 ```bash
 docker-compose up -d
 ```
+
+**Option B — Supabase:**
+Fill in the connection details from your Supabase project's connection string into `.env`. No additional setup required.
 
 ---
 
@@ -242,7 +250,7 @@ holdit/
 │   ├── __init__.py      #   get_scorer(version) factory + StockScorer alias
 │   ├── base.py          #   ScorerBase — shared score_all(), get_grade(), _save()
 │   ├── v1.py            #   ScorerV1 — legacy (PER/PBR/dividend, max 47pts)
-│   └── v2.py            #   ScorerV2 — Buffett & Lynch model (max 100pts) [default]
+│   └── v2.py            #   ScorerV2 — Lynch's PEG concept added model (max 100pts) [default]
 ├── backtest.py          # Year-by-year historical score reconstruction
 ├── models.py            # SQLAlchemy ORM models
 ├── database.py          # DB session and engine setup

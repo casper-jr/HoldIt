@@ -1,5 +1,5 @@
 """
-scorer_base.py — 모든 scorer 버전의 공통 인프라
+scorers/base.py — 모든 scorer 버전의 공통 인프라
 
 공통 로직:
   - score_all()  : DB 전체/오늘치 채점 실행

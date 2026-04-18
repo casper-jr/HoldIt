@@ -1,8 +1,8 @@
 """
-scorer.py — scorer 팩토리
+scorers/ — scorer 패키지
 
 사용법:
-    from scorer import get_scorer
+    from scorers import get_scorer
     scorer = get_scorer('v2')   # 기본값
     scorer.score_all()
 
@@ -11,8 +11,8 @@ scorer.py — scorer 팩토리
     v2 — Buffett & Lynch 기반 현행 기준 (ROE/FCF/PEG/부채비율 추가, 최대 100점)
 """
 
-from scorer_v1 import ScorerV1
-from scorer_v2 import ScorerV2
+from .v1 import ScorerV1
+from .v2 import ScorerV2
 
 _SCORERS = {
     'v1': ScorerV1,

@@ -1,5 +1,5 @@
 """
-scorer_v1.py — main 브랜치 기준 채점 로직 (레거시)
+scorers/v1.py — main 브랜치 기준 채점 로직 (레거시)
 
 v1 점수 체계 (최대 47점 정량):
   - PER:       최대 20점  (< 5→20, < 8→15, < 10→10, else→5)
@@ -15,7 +15,7 @@ v1 점수 체계 (최대 47점 정량):
 """
 
 from models import RawFinancialData
-from scorer_base import ScorerBase
+from .base import ScorerBase
 
 
 class ScorerV1(ScorerBase):

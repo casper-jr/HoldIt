@@ -23,7 +23,7 @@ def _handle_sigint(sig, frame):
     print("\n\n중단 요청됨. 현재 종목 처리 후 중단합니다... (한번 더 누르면 즉시 중단)")
 from sqlalchemy import func as sa_func
 from processor import FinancialProcessor
-from scorer import get_scorer, StockScorer
+from scorers import get_scorer, StockScorer
 from database import SessionLocal
 from models import Company, RawFinancialData, ProcessedFinancialData, ScoringResult, FetchHistory
 

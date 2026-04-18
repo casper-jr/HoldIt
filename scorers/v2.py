@@ -1,5 +1,5 @@
 """
-scorer_v2.py — Buffett & Lynch 철학 기반 채점 로직 (현재 기본 버전)
+scorers/v2.py — Buffett & Lynch 철학 기반 채점 로직 (현재 기본 버전)
 
 v2 점수 체계 (최대 100점):
   카테고리 1 — 수익 창출력 및 내재 가치 (40점)
@@ -20,7 +20,7 @@ v2 점수 체계 (최대 100점):
 """
 
 from models import RawFinancialData
-from scorer_base import ScorerBase
+from .base import ScorerBase
 
 
 class ScorerV2(ScorerBase):

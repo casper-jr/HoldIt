@@ -22,7 +22,7 @@ import yfinance as yf
 import pandas as pd
 
 from config import DART_API_KEY
-from scorer import get_scorer, StockScorer
+from scorers import get_scorer, StockScorer
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
 

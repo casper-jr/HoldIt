@@ -69,7 +69,7 @@ Total score is **100 points**, divided into three categories.
 | 50–70 | C | Hold if already owned |
 | < 50 | D | Not recommended |
 
-> Stocks that cannot reach grade B (70pts) even with a perfect qualitative score (10pts moat) are automatically excluded from the leaderboard.
+> Stocks that cannot reach grade C (50pts) even with a perfect qualitative score (10pts moat) are automatically excluded from the leaderboard and exports. This means any stock with a quantitative score below 40 is filtered out.
 
 ---
 
@@ -208,7 +208,7 @@ python3 main.py score                 # Today's processed data only (v2 default)
 python3 main.py score --all           # Re-score entire database
 python3 main.py score --all --scorer v1   # Score with legacy v1
 
-# [Step 4] View leaderboard (threshold: 27+ quantitative points)
+# [Step 4] View leaderboard (C grade or above, accounting for max qualitative score)
 python3 main.py view                  # All markets, v2 scorer
 python3 main.py view kr               # Korean stocks only
 python3 main.py view us 20            # Top 20 US stocks

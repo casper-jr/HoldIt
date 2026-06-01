@@ -1,9 +1,10 @@
 name: Weekly Stock Export
 
 on:
-  schedule:
-    - cron: '0 8 * * 5'  # 매주 금요일 17:00 KST (08:00 UTC)
-  workflow_dispatch:        # 수동 실행 (Actions 탭에서 직접 트리거 가능)
+  # schedule 비활성화 — Cloud Scheduler + Cloud Run Job으로 이전됨
+  # schedule:
+  #   - cron: '0 8 * * 5'  # 매주 금요일 17:00 KST (08:00 UTC)
+  workflow_dispatch:        # 수동 실행만 남겨둠 (필요 시 수동 트리거 가능)
     inputs:
       kr_limit:
         description: 'KR 수집 개수 (테스트 시 3~5 권장)'

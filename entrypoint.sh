@@ -32,6 +32,9 @@ python3 main.py export
 echo "[5단계] GCS 버킷 업로드"
 python3 gcs_upload.py
 
+echo "[6단계] BigQuery 적재"
+python3 bq_export.py
+
 echo "========================================="
 echo "파이프라인 완료"
 echo "========================================="

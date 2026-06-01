@@ -586,12 +586,6 @@ class DartFetcher:
             # 3. yfinance에서 현재 시장 데이터(주가, 주식수, 배당금 등) 가져오기
             market_data = self.get_market_data(stock_code)
 
-            # 배당금이 0원인 종목은 평가 대상에서 제외
-            if market_data.get('dividend_per_share', 0.0) <= 0:
-                print(f"⏭️ 최근 1년간 배당금 지급 내역이 없어 제외합니다: {corp_name} ({stock_code})")
-                record_fetch_history(db, stock_code, today, "SKIP_NO_DIVIDEND", "배당금 0원")
-                return
-            
             # 3.5. DART alotMatter.json으로 배당 연속 인상 연수 재계산
             # yfinance는 한국 주식 배당 이력을 3~5년치만 제공하는 경우가 많아,
             # 더 긴 이력(최대 12년)을 제공하는 DART API로 대체합니다.
@@ -907,12 +901,6 @@ class USFetcher:
 
             if market_data['current_price'] <= 0:
                 record_fetch_history(db, ticker, today, "FAIL_NO_DATA", "주가 데이터 없음")
-                return
-
-            # 배당금 없는 종목 제외
-            if market_data['dividend_per_share'] <= 0:
-                print(f"⏭️ 배당금 없어 제외: {company_name} ({ticker})")
-                record_fetch_history(db, ticker, today, "SKIP_NO_DIVIDEND", "배당금 0")
                 return
 
             # 4. 자사주 소각 여부 (US는 매입≈소각으로 간주)

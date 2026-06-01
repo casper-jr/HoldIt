@@ -8,11 +8,12 @@ def reset_database():
     """
     print("데이터베이스 초기화를 시작합니다...")
     
-    # 사용자 확인 (실수 방지)
-    confirm = input("정말로 모든 데이터를 삭제하시겠습니까? (y/n): ")
-    if confirm.lower() != 'y':
-        print("초기화를 취소합니다.")
-        return
+    import os
+    if os.environ.get("FORCE_RESET") != "true":
+        confirm = input("정말로 모든 데이터를 삭제하시겠습니까? (y/n): ")
+        if confirm.lower() != 'y':
+            print("초기화를 취소합니다.")
+            return
 
     db = SessionLocal()
     try:

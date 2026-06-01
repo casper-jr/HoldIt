@@ -1,0 +1,12 @@
+.env
+.envrc
+__pycache__/
+*.pyc
+*.pyo
+export/
+.git/
+.github/
+docker-compose.yml
+*.md
+notes.md
+scoring_guidelines.md

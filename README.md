@@ -6,7 +6,7 @@ A quantitative stock screening and scoring tool for long-term investors, inspire
 
 ## Overview
 
-HoldIt helps identify undervalued, dividend-paying quality stocks by:
+HoldIt helps identify undervalued quality stocks by:
 
 1. **Fetching** raw financial data from DART API (KR) and yfinance (US)
 2. **Processing** raw data into evaluation metrics (PER, ROE, FCF yield, PEG, etc.)
@@ -59,7 +59,7 @@ Total score is **100 points**, divided into three categories.
 
 | Metric | Max Score | Notes |
 |---|---|---|
-| Dividend Yield | 10 | > 7% → 10pts, > 5% → 7pts, > 3% → 5pts, < 3% → 2pts |
+| Dividend Yield | 10 | > 7% → 10pts, > 5% → 7pts, > 3% → 5pts, > 0% → 2pts, 0% → 0pts |
 | Dividend Growth | 10 | ≥ 10 consecutive years → 10pts, ≥ 7yrs → 8pts, ≥ 5yrs → 6pts, ≥ 3yrs → 3pts |
 | Share Cancellation | 10 | Confirmed buyback cancellation in past year → 10pts (cancellation only, not mere repurchase) |
 

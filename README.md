@@ -20,14 +20,17 @@ The scoring model is designed to filter out value traps (low PER but no growth) 
 
 ## Tech Stack
 
-| Component | Technology                                                           |
-|---|----------------------------------------------------------------------|
-| Language | Python 3.11+                                                         |
-| Database | PostgreSQL — Supabase (production / CI) · Docker Compose (local dev) |
-| ORM | SQLAlchemy 2.0                                                       |
-| KR Data Source | [DART Open API](https://opendart.fss.or.kr) + FinanceDataReader      |
-| US Data Source | yfinance (screener, financials, dividends)                           |
-| CI/CD | GitHub Actions (weekly scheduled export for qualitative assessment)  |
+| Component | Technology |
+|---|---|
+| Language | Python 3.11+ |
+| Database | PostgreSQL — GCP Cloud SQL (production) · Docker Compose (local dev) |
+| ORM | SQLAlchemy 2.0 + Cloud SQL Python Connector |
+| KR Data Source | [DART Open API](https://opendart.fss.or.kr) + FinanceDataReader |
+| US Data Source | yfinance (screener, financials, dividends) |
+| Scheduler | GCP Cloud Scheduler (weekly) → Cloud Run Job |
+| Container | Docker (linux/amd64) · GCP Artifact Registry |
+| Output Storage | GCP Cloud Storage (CSV exports) |
+| Secrets | GCP Secret Manager |
 
 ---
 
@@ -160,7 +163,7 @@ Output is a year-by-year comparison table covering all metrics and per-category 
 ### Prerequisites
 - Python 3.11+
 - [DART API key](https://opendart.fss.or.kr/intro/main.do) (for Korean stocks)
-- PostgreSQL — Supabase project **or** Docker Compose for local dev
+- PostgreSQL — GCP Cloud SQL (production) **or** Docker Compose (local dev)
 
 ### 1. Clone and install dependencies
 
@@ -183,6 +186,8 @@ DB_PASSWORD=your_db_password
 DB_NAME=your_db_name
 ```
 
+> **Cloud Run environment**: `INSTANCE_CONNECTION_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` are injected automatically via GCP Secret Manager and Cloud Run Job environment variables. No `.env` file needed.
+
 ### 3. Start the database
 
 **Option A — Local (Docker):**
@@ -190,8 +195,12 @@ DB_NAME=your_db_name
 docker-compose up -d
 ```
 
-**Option B — Supabase:**
-Fill in the connection details from your Supabase project's connection string into `.env`. No additional setup required.
+**Option B — GCP Cloud SQL (production):**
+The pipeline runs automatically via Cloud Scheduler every Friday at 17:00 KST.
+To trigger manually:
+```bash
+gcloud run jobs execute holdit-weekly --region=asia-northeast3
+```
 
 ---
 
@@ -253,10 +262,13 @@ holdit/
 │   └── v2.py            #   ScorerV2 — Lynch's PEG concept added model (max 100pts) [default]
 ├── backtest.py          # Year-by-year historical score reconstruction
 ├── models.py            # SQLAlchemy ORM models
-├── database.py          # DB session and engine setup
+├── database.py          # DB session and engine setup (auto-switches: Cloud SQL connector / psycopg2)
 ├── config.py            # Environment variable loading
-├── docker-compose.yml   # PostgreSQL container configuration
+├── gcs_upload.py        # Upload export/ CSVs to GCS bucket (Cloud Run pipeline step)
+├── Dockerfile           # Container image build config for Cloud Run Job (linux/amd64)
+├── entrypoint.sh        # Pipeline entry script executed by Cloud Run Job
+├── docker-compose.yml   # PostgreSQL container for local development
 ├── requirements.txt     # Python dependencies
 ├── scoring_guidelines.md # Scoring rubric with investment philosophy rationale (Korean)
-└── export/              # CSV exports for qualitative review
+└── export/              # CSV exports for qualitative review (also uploaded to GCS)
 ```

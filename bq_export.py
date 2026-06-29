@@ -13,7 +13,7 @@ from google.cloud import bigquery
 from sqlalchemy import text
 from database import SessionLocal
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID", "project-d8b33f7e-68af-4f6b-978")
+PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 DATASET_ID = "holdit"
 TABLE_ID = "stock_scores"
 FULL_TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"

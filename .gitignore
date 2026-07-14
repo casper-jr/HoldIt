@@ -217,3 +217,7 @@ __marimo__/
 
 notes.md
 .DS_Store
+# dbt
+dbt_packages/
+dbt/logs/
+airflow/logs/

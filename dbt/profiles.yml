@@ -1,0 +1,23 @@
+# env_var() only, never literal credentials. Two targets against one GCP project:
+#   dev  -> holdit_silver_dev / holdit_gold_dev   (local development)
+#   prod -> holdit_silver / holdit_gold           (Airflow)
+# The dataset suffixing is done by macros/generate_schema_name.sql, driven by the
+# folder-level +schema (silver|gold) and the active target name.
+holdit:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth              # local gcloud application-default credentials
+      project: "{{ env_var('GCP_PROJECT') }}"
+      dataset: holdit            # base; overridden per-folder by generate_schema_name
+      location: asia-northeast3
+      threads: 4
+    prod:
+      type: bigquery
+      method: service-account
+      keyfile: "{{ env_var('DBT_KEYFILE') }}"
+      project: "{{ env_var('GCP_PROJECT') }}"
+      dataset: holdit
+      location: asia-northeast3
+      threads: 4

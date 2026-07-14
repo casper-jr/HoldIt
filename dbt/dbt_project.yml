@@ -1,0 +1,45 @@
+name: 'holdit'
+version: '1.0.0'
+config-version: 2
+
+profile: 'holdit'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Folders map to datasets + materializations. No bronze: entry — dbt has nothing
+# to build there; Bronze is a source, read and tested but never materialized.
+# The daily models (fct_price_daily, fct_valuation_daily) override +partition_by
+# to price_date in their own config(); inheriting snapshot_date would partition
+# them on a column they do not have.
+models:
+  holdit:
+    silver:
+      staging:
+        +schema: silver
+        +materialized: incremental
+        +partition_by: {field: snapshot_date, data_type: date}
+        +cluster_by: [ticker]
+      core:
+        +schema: silver
+        +materialized: incremental
+        +partition_by: {field: snapshot_date, data_type: date}
+        +cluster_by: [ticker]
+    gold:
+      +schema: gold
+      metrics:
+        +materialized: incremental
+        +partition_by: {field: snapshot_date, data_type: date}
+        +cluster_by: [ticker]
+      scoring:
+        +materialized: incremental
+        +partition_by: {field: snapshot_date, data_type: date}
+        +cluster_by: [ticker]
+      marts:
+        +materialized: table        # Tableau reads these; volume is trivial

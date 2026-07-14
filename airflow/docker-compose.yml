@@ -34,11 +34,16 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - airflow db migrate && airflow users create --username admin --password admin
-        --firstname admin --lastname admin --role Admin --email admin@example.com
+    # Use the image's own entrypoint (it registers the runtime UID in /etc/passwd,
+    # which a custom bash entrypoint would skip) and let its bootstrap env vars do
+    # the db migrate + admin user create.
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    command: version
     restart: on-failure
 
   scheduler:

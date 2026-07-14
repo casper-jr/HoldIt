@@ -78,5 +78,26 @@ with DAG(
         op_kwargs={"endpoint": "price_history"},
     )
 
+    # financials + dividends are point/history fetches — no date range needed.
+    ingest_financials = BashOperator(
+        task_id="ingest_us_financials", bash_command=_ingest("financials")
+    )
+    load_financials = PythonOperator(
+        task_id="load_bronze_financials",
+        python_callable=load_bronze,
+        op_kwargs={"endpoint": "financials"},
+    )
+
+    ingest_dividends = BashOperator(
+        task_id="ingest_us_dividends", bash_command=_ingest("dividends")
+    )
+    load_dividends = PythonOperator(
+        task_id="load_bronze_dividends",
+        python_callable=load_bronze,
+        op_kwargs={"endpoint": "dividends"},
+    )
+
     ingest_quote >> load_quote
     ingest_price >> load_price
+    ingest_financials >> load_financials
+    ingest_dividends >> load_dividends

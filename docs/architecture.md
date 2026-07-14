@@ -109,6 +109,7 @@ holdit/
 │   │   └── dart_client.py                  fetch, return response.text + http_status
 │   ├── serialize.py                        dict/DataFrame → NDJSON (to_json orient='split')
 │   ├── gcs_writer.py                       clear prefix, then write snapshot_date={ds}
+│   ├── universe.py                         which tickers a run fetches (US screener; KR in Step 6)
 │   ├── config.py                           Secret Manager, no .env
 │   └── main.py                             CLI: --source --endpoint --snapshot-date
 ├── Dockerfile                              Cloud Run Job image

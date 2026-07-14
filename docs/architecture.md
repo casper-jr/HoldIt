@@ -115,6 +115,9 @@ holdit/
 ├── Dockerfile                              Cloud Run Job image
 ├── requirements.txt
 │
+├── bronze/
+│   └── create_bronze_tables.sql            Bronze DDL — dbt never builds Bronze, so it lives here
+│
 ├── dbt/
 │   ├── dbt_project.yml                     maps folders → datasets + materializations
 │   ├── profiles.yml                        env_var() only, never literal credentials
@@ -179,6 +182,8 @@ holdit/
 │
 ├── airflow/
 │   ├── docker-compose.yml
+│   ├── Dockerfile                          base image + ingestion deps (runs ingestion in-container for now)
+│   ├── requirements-airflow.txt
 │   └── dags/
 │       └── holdit_weekly.py                the only orchestrator
 │

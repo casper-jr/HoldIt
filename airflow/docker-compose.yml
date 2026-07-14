@@ -4,15 +4,26 @@
 # Redis — LocalExecutor is right for ~1200 rows/week.
 ---
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.9.3
+  image: holdit/airflow:2.9.3        # built from ./Dockerfile (base + ingestion deps)
+  build:
+    context: .
+    dockerfile: Dockerfile
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    # ingestion + BigQuery load run in-container; auth via the mounted host ADC.
+    GCP_PROJECT: project-d8b33f7e-68af-4f6b-978
+    GOOGLE_CLOUD_PROJECT: project-d8b33f7e-68af-4f6b-978
+    HOLDIT_RAW_BUCKET: holdit-raw
+    PYTHONPATH: /opt/airflow
+    GOOGLE_APPLICATION_CREDENTIALS: /home/airflow/.config/gcloud/application_default_credentials.json
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
+    - ../ingestion:/opt/airflow/ingestion            # the ingestion CLI, mounted (not baked)
+    - ${HOME}/.config/gcloud:/home/airflow/.config/gcloud:ro   # host ADC, read-only
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:

@@ -10,9 +10,9 @@
 ## Status
 
 - [x] Step 0 — Clarify the goal
-- [ ] Step 1 — Decide what survives
-- [ ] Step 2 — Reset GCP and stand up the skeleton
-- [ ] Step 3 — Build Bronze and the ingestion path
+- [x] Step 1 — Decide what survives
+- [x] Step 2 — Reset GCP and stand up the skeleton
+- [~] Step 3 — Build Bronze and the ingestion path (path proven on a 20-ticker slice; scale-up pending)
 - [ ] Step 4 — Build Silver
 - [ ] Step 5 — Build Gold
 - [ ] Step 6 — Add KR as the second source
@@ -49,6 +49,12 @@
 - **The bulk backfill is a one-time manual load, not `airflow dags backfill`.** 5 years × 52 weeks × 1200 tickers would be ~312k yfinance calls and immediate rate-limiting. Instead : one `history(start, end)` call per ticker for the whole 5-year span, plus one annual-statements call per ticker. ~2400 calls total, one Bronze row each, `snapshot_date` = the request as-of date, `request_params` bounding the range
 - These two backfills are separate things and must not be conflated : the **one-time bulk load** seeds history, while **`airflow dags backfill`** recovers a missed weekly run. Only the second is `{{ ds }}`-driven
 - **Exit criteria** : run the same date twice, assert the row count does not change. Wire `ingest_us` → `load_bronze` with `{{ ds }}`, and run `airflow dags backfill` over 3 historical dates to prove the weekly path is date-parameterized
+- **Progress (2026-07-15)** — exit criteria met on a 20-ticker US slice for `quote` + `price_history`:
+	- Bronze DDL lives in `bronze/create_bronze_tables.sql` (the tree had no home for it). The four `raw_yf_*` tables exist, partitioned by `snapshot_date`, clustered by `ticker`
+	- Ingestion → GCS → `bq load --replace` per partition proven; re-loading a date leaves the count unchanged (idempotent); payload is native JSON, `http_status` NULL for yf, both `Close`/`Adj Close` kept, and the `price_history` index carries dates distinct from `snapshot_date`
+	- DAG `holdit_weekly` (`airflow/dags/holdit_weekly.py`) wires `ingest_us_* → load_bronze_*`; `airflow dags backfill` over 06-19/06-26/07-03 produced three distinct partitions with distinct payload windows
+	- **Deviation from the spec, deliberate & temporary** : ingestion runs *in the Airflow container* via `BashOperator` (image `airflow/Dockerfile`, host ADC mounted), not yet a Cloud Run Job via `CloudRunExecuteJobOperator`. Migrate before Step 6 — the Q1 decision to defer Cloud Run plumbing until the logic is proven
+	- **Remaining before Step 4** : add `financials` + `dividends` to the DAG (same path), and run the one-time 5-year bulk backfill over the full universe (the slice does not seed enough history for the Silver reconstruction)
 
 ### Step 4 — Build Silver
 - `dim_company` as a dbt snapshot, `fct_price_daily` at (`ticker`, `price_date`), `fct_financials_snapshot` at (`ticker`, `snapshot_date`), `fct_dividend_history` at (`ticker`, `fiscal_year`)

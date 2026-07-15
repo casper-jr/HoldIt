@@ -25,6 +25,10 @@ with latest_per_day as (
                 order by p.snapshot_date desc
             ) as rn
         from {{ ref('stg_yf__price_history') }} p
+        -- a row with no close is not a price observation: yfinance emits an
+        -- incomplete-most-recent-bar (open/high/volume but null close) for the fetch
+        -- day. fct_price_daily is days with an actual close.
+        where p.close is not null
     )
     where rn = 1
 )

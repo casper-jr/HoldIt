@@ -4,13 +4,24 @@
 > decision in `architecture.md`. It is not maintained — file paths and line numbers below refer
 > to the pre-refactor code, recoverable from git history on `main`.
 
-## Purpose
-- A Stock-Screening program for US and Korea's stock market
+## What it was
+A stock-screening program for the US and Korean markets: it fetched fundamentals,
+computed valuation metrics, scored each stock under a Buffett/Lynch-style model, and
+printed a ranked leaderboard.
 
-## Problem
-- I need to do a Data Analytics project, but this project does not really match the requirements for a job post from companies.
-	- Need to refactor the project to a End-to-End project that contains a Data Warehouse(Cloud-base) to Data Analytics project by SQL
-- Not really comfortable to compare different models by doing the whole scoring process again. Instead, it will be easier to create different views that can show the results of scoring models by SQL after creating the Data Warehouse
+## Why it was rebuilt
+The original was a single Python application backed by Cloud SQL. It ran, but it could
+not support the two capabilities the project set out to demonstrate:
+
+- **A warehouse with point-in-time history.** Data was transformed on load and each
+  weekly run overwrote the previous one, so no time series or reproducible analysis was
+  possible.
+- **Model comparison without re-computation.** Scoring logic was hard-coded in Python;
+  comparing two models meant re-running the whole pipeline. Expressing scoring as SQL
+  over a warehouse makes competing models queryable side by side.
+
+The numbered sections below are the detailed failure analysis that justified each
+decision in the rebuild.
 
 ### 1. There is no warehouse — data is transformed on load and history is destroyed
 - `raw_financial_data` is not raw. `eps_growth_rate` (a derived CAGR) is computed at fetch time (`fetcher.py`), CapEx is `abs()`-ed, and `share_cancel` is collapsed from a disclosure search into a single boolean. The original API payload is never stored, so nothing can be re-derived without re-calling DART/yfinance

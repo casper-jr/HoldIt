@@ -1,15 +1,16 @@
 # Architecture — the To-Be spec
 
-> The stable reference. Read before touching any model, table, or DAG.
-> For *what to build next*, see `plan.md`. For *why these rules exist*, see `as-is.md`.
+> The stable reference for the system's design. For the build sequence, see `plan.md`;
+> for the analysis of the old system that motivated it, see `as-is.md`.
 
 ## Purpose
-- Refactoring the As-Is project to a Data Warehouse and Data Analytics project on stocks, achieving skills as a Data Engineer and a Data Analyst
-- If needed, I can take out all the codes from the current project, and adopt new frameworks or skills(dbt, airflow, etc.) to refactor this project
+This is the design specification for the rebuilt system: a cloud data warehouse and
+analytics layer for stock screening, built on the medallion pattern with dbt, BigQuery,
+and Airflow. It defines every layer, table, grain, and invariant — and records the
+decisions behind them, including the alternatives that were considered and rejected.
 
 ## Data Architecture
 - ### Architecture Diagram
-	- TODO : redraw with draw.io. The ASCII version below is the spec until then
 
 ```
   SOURCE                 ┌──────────────┐   ┌──────────────┐
@@ -315,7 +316,7 @@ BigQuery
 	- **Rejected — streaming / Kafka.** Fundamentals update quarterly and the screening question is long-term. Weekly batch is not a compromise, it is the right cadence for the domain
 	- **Rejected — Snowflake / Databricks.** GCP is a stated requirement drawn from the target job postings
 	- **Rejected — dbt Cloud.** Its free tier would work, but dbt-core inside Airflow keeps orchestration in one place and avoids two schedulers — the same reason Cloud Scheduler is deleted
-	- **Chosen — BigQuery native `JSON` type for payloads, over `STRING`.** Validated at load, stored efficiently, queryable with `JSON_VALUE` without a `PARSE_JSON` wrapper. Tradeoff : malformed JSON fails the load rather than landing; acceptable because serialization is under my control and DART returns well-formed JSON
+	- **Chosen — BigQuery native `JSON` type for payloads, over `STRING`.** Validated at load, stored efficiently, queryable with `JSON_VALUE` without a `PARSE_JSON` wrapper. Tradeoff : malformed JSON fails the load rather than landing; acceptable because serialization is controlled here and DART returns well-formed JSON
 	- **Chosen — Airflow, justified by retries + the DQ gate + dependency management**, with backfill for missed weeks as a secondary benefit. A weekly cron alone would not justify it, and backfill alone is a weaker argument than it first appears given the fundamentals limit above
 	- **Chosen — daily prices, weekly fundamentals, weekly DAG.** Three cadences, one schedule. `yf.Ticker().history(start, end)` returns a whole date range in a single call, so the weekly run fetches the week's seven days of prices in the same 1200 calls it already makes. A daily price series therefore costs **no extra schedule** — which matters, because a daily DAG would require an always-on scheduler and break the local-Airflow decision above
 	- **Chosen — deep backfill on day one : 5 years of prices, ~4 years of reconstructed fundamentals.** `history()` backfills prices cleanly, so price depth is free and exact. Valuation depth is not free — prices are only half of PER, and without reconstructed fundamentals every trailing-median question would be unanswerable until 2029. The reconstruction is therefore built deliberately, with survivorship / restatement / lookahead bias accepted and labelled (see Failure and Recovery). Fundamentals reach ~4 years because that is what yfinance annuals return, so valuation history is bounded by the shorter of the two
@@ -403,5 +404,5 @@ BigQuery
 	- Which A/B-graded stocks are in the largest drawdown from their 1-year high? (Needs `fct_price_daily`. Exact — prices are observed, not reconstructed)
 	- What is the coverage and null rate per source per week, and is it getting better or worse?
 - ### Tableau Dashboard
-	- TODO after the warehouse and pipeline are built. Connects to `holdit_gold` only
+	- Reads `holdit_gold` only — the `mart_*` models and the `report_*` views are its source
 	- Tableau Public is free but publishes data openly and cannot connect live to BigQuery, so an extract published from Tableau Desktop is the fallback if Desktop's trial expires

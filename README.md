@@ -134,6 +134,10 @@ The six Gold marts are shaped around concrete questions:
 - **Score trend** (`mart_score_history`) and **data quality** (`mart_data_quality`)
   tracked over time.
 
+The [`analysis/`](analysis/) folder holds the SQL that works these questions —
+exploratory and advanced analytics on the Gold layer, plus two reusable reporting views
+(`report_stock`, `report_sector`) that the dashboard connects to.
+
 ---
 
 ## Scoring models
@@ -184,6 +188,8 @@ dbt/
   seeds/            scoring rules, model definitions, qualitative moat — as CSV
   snapshots/        snap_company (SCD2 engine)
   tests/            lookahead / live-only / not-future assertions
+analysis/           SQL analysis on the Gold layer — EDA, advanced analytics,
+                    and two report views (report_stock, report_sector)
 airflow/            Docker Compose stack + the weekly DAG
 docs/
   architecture.md   the full To-Be spec and the decisions behind it

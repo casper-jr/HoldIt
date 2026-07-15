@@ -1,11 +1,8 @@
-# Refactoring Plan — the worklist
+# Build plan — the worklist
 
-> The mutable doc. Check steps off as they land; correct a step in place if reality disagrees
-> with it. For the spec, see `architecture.md`. For why, see `as-is.md`.
->
-> **Step 0 is done** — it is the decision this document records, not work remaining.
-> **Step 1 is decided but not executed** : the delete list below is settled, the files are still
-> there. Do not re-litigate what survives; just carry it out.
+> The build sequence, step by step: each step states its exit criteria and a short progress
+> note recording how it landed. For the design spec, see `architecture.md`; for the analysis
+> of the old system that motivated it, see `as-is.md`.
 
 ## Status
 
@@ -17,29 +14,22 @@
 - [x] Step 5 — Build Gold (metrics + scoring + 6 marts; v1/v2 both scored; 77/77 prod build)
 - [x] Step 5.5 — Scale US to the full universe (954 tickers, 100% coverage; warehouse rebuilt 54/54)
 - [x] Step 8 — Rewrite `README.md` (data-warehouse rewrite + 2 hand-off Artifacts delivered)
-- [ ] Step 7 — Create the Tableau dashboard (**user-owned** — done by the user, for interview prep, not the assistant)
-- [ ] Step 6 — Add KR as the second source (**conditional / deferred** — see decision below)
+- [ ] Step 7 — Create the Tableau dashboard (in progress — see sequencing note)
+- [ ] Step 6 — Add KR as the second source (**conditional / deferred** — see sequencing note)
 
-> **Sequencing decision (2026-07-15).** US is taken all the way to a finished, presentable
-> state before any KR work, and the analysis is split by owner:
-> - **Assistant**: scale US to the full universe (5.5) → rewrite `README.md` (8) → then
->   two hand-off guides — (a) what to explore in the GCP/BigQuery console with SQL at each
->   layer, and (b) what to focus on in Tableau for maximum resume/interview impact.
-> - **User**: builds the Tableau dashboard and does the analysis themselves (Step 7) —
->   deliberately, because owning the analysis is what an interview tests.
-> - **Step 6 (KR) is conditional, not committed**: it starts with a Bronze DART null-rate
->   probe, and if coverage is poor the KR analysis may be dropped rather than forced.
->   `cancel` scoring and KR moat rows stay parked until then.
->
-> Step numbers are kept for continuity; execution order is 5 → 5.5 → 8 → (user: 7) →
-> (maybe) 6.
+> **Sequencing note.** The US path is taken all the way to a finished, presentable state
+> before any KR work: scale US to the full universe (5.5), rewrite `README.md` (8), build
+> the analysis layer, then the Tableau dashboard (7). **Step 6 (KR) is conditional**: it
+> begins with a Bronze DART null-rate probe, and if coverage is poor the KR analysis may
+> be dropped rather than forced — `cancel` scoring and KR moat rows stay parked until then.
+> Step numbers are kept for continuity; execution order is 5 → 5.5 → 8 → 7 → (maybe) 6.
 
 ---
 
 ### Step 0 — Clarify the goal
 - Refactoring a project to make the scoring and screening process more efficient and easy to use by creating the Data Warehouse and 3 layers
 - Implement a full End to End(Data Warehouse -> Data Analytics)
-- This is not for a product-level project for real-business. I will use this as a personal project and a porfolio for my resume. Using GCP is for the Cloud-Environment requirements on the job postings, but I will use free tools or APIs for other things such as data source and tools if possible
+- Scope: a personal portfolio project demonstrating an end-to-end build, not a production system for real business use. GCP is used to match the cloud-environment requirements common in job postings; free tools and APIs are used elsewhere where possible (data sources, orchestration)
 
 ### Step 1 — Decide what survives
 - Reduce Python to ingestion only. Once Silver and Gold move to dbt, the rest is **deleted, not reorganized**

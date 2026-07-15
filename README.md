@@ -1,274 +1,221 @@
-# HoldIt
+# HoldIt — a stock-screening data warehouse
 
-A quantitative stock screening and scoring tool for long-term investors, inspired by Warren Buffett and Peter Lynch's investment philosophy. HoldIt automates the collection, processing, and scoring of financial data for both Korean (KRX) and US (NYSE/NASDAQ) listed stocks.
+An end-to-end analytics warehouse that turns raw market data into a tested,
+version-comparable stock-screening model. Built on **BigQuery + dbt + Airflow**
+following a **medallion architecture** (Bronze → Silver → Gold), it ingests five
+years of fundamentals and prices for **~950 US stocks**, reconstructs a weekly
+point-in-time history, and scores every stock under two competing valuation models —
+all defined as code and guarded by data-quality tests.
 
----
-
-## Overview
-
-HoldIt helps identify undervalued quality stocks by:
-
-1. **Fetching** raw financial data from DART API (KR) and yfinance (US)
-2. **Processing** raw data into evaluation metrics (PER, ROE, FCF yield, PEG, etc.)
-3. **Scoring** each stock on a 100-point scale across three categories
-4. **Viewing** a ranked leaderboard filtered by market and scorer version
-5. **Exporting** results to CSV for manual qualitative review in Excel
-
-The scoring model is designed to filter out value traps (low PER but no growth) by incorporating ROE, Free Cash Flow, and PEG alongside traditional valuation metrics.
+> This is a deliberate rebuild of an earlier Python/PostgreSQL screener. The rebuild
+> exists to fix a class of bug the old system couldn't see and to demonstrate a
+> production-shaped data-engineering + analytics stack. The engineering decisions and
+> the reasoning behind them live in [`docs/architecture.md`](docs/architecture.md); the
+> frozen analysis of the old system's failures is in [`docs/as-is.md`](docs/as-is.md).
 
 ---
 
-## Tech Stack
+## What it does
 
-| Component | Technology |
+1. **Ingests** raw payloads from yfinance (quote, 5-year price history, financial
+   statements, dividends) into an **immutable Bronze layer** — verbatim JSON, nothing
+   computed.
+2. **Parses and conforms** in **Silver**: prices, a reconstructed weekly fundamentals
+   history, an SCD2 company dimension, and dividend history — each at its own grain,
+   each tested.
+3. **Computes and scores** in **Gold**: seven valuation metrics, two scoring models
+   (v1 and v2) expressed as CSV rules, and six analytics marts.
+4. **Orchestrates** the whole path weekly with a single Airflow DAG, with a hard
+   data-quality gate between Silver and Gold.
+
+---
+
+## Architecture
+
+```
+  yfinance ──► BRONZE (holdit_bronze)          raw JSON, immutable, partitioned by date
+              raw_yf_quote / price_history /    Python moves data — derives nothing
+              financials / dividends            missing is NULL, never 0.0
+                        │
+                    dbt │ (parse only)
+                        ▼
+              SILVER (holdit_silver)            conform · type · historize
+              stg_yf__*  ·  dim_company (SCD2)   price_date from the payload index
+              fct_price_daily                    fundamentals reconstructed onto a
+              fct_financials_snapshot            weekly grid with a filing-lag rule
+              fct_dividend_history               ⛔ dbt_test_silver — hard gate
+                        │
+                    dbt │ (transform)
+                        ▼
+              GOLD (holdit_gold)                metrics · scoring · marts
+              fct_metrics → int_metrics_unpivot  scoring is CSV rules, not code
+              → fct_metric_scores (v1, v2)       both models coexist and are compared
+              fct_valuation_daily (as-of join)
+              mart_* (6)                         the only tables Tableau reads
+```
+
+Every table is defined by a `.sql` file in this repo (`dbt/`). BigQuery is the
+materialization; the repo is the source of truth. Nothing is authored in the console.
+
+---
+
+## The data (current build)
+
+| | |
 |---|---|
-| Language | Python 3.11+ |
-| Database | PostgreSQL — GCP Cloud SQL (production) · Docker Compose (local dev) |
-| ORM | SQLAlchemy 2.0 + Cloud SQL Python Connector |
-| KR Data Source | [DART Open API](https://opendart.fss.or.kr) + FinanceDataReader |
-| US Data Source | yfinance (screener, financials, dividends) |
-| Scheduler | GCP Cloud Scheduler (weekly) → Cloud Run Job |
-| Container | Docker (linux/amd64) · GCP Artifact Registry |
-| Output Storage | GCP Cloud Storage (CSV exports) |
-| Secrets | GCP Secret Manager |
+| Universe | **954 US stocks** (NASDAQ + NYSE, top ~1000 by market cap) |
+| History | **5 years** of daily prices · ~4 years of annual fundamentals |
+| Payload coverage | **100%** (954/954 on every endpoint, 0 null payloads) |
+| Rows | 1.15M daily prices · 1.15M daily valuations · 1,043 weekly metric rows |
+| Models | 8 Silver + 10 Gold, built by dbt |
+| Tests | **54 dbt tests, all passing** on the production datasets |
 
 ---
 
-## Scoring System (v2 — Default)
+## What makes it more than a pipeline
 
-Total score is **100 points**, divided into three categories.
+**Point-in-time reconstruction with lookahead control.** The old system stored one row
+per stock that was overwritten weekly — no history. Here, `fct_financials_snapshot`
+rebuilds a weekly grid five years back and attaches, for each synthetic week, only the
+annual filing that was *knowable* then (fiscal year-end + a 90-day US filing lag). A
+dbt test (`assert_no_lookahead`) makes this mandatory: no row may carry fundamentals
+that filed after its own date. Reconstructed rows are labelled and **never earn a
+score** — a separate test (`assert_scores_are_live_only`) enforces that an estimate
+never becomes a grade.
 
-### Category 1 — Profitability & Intrinsic Value (40pts)
+**Scoring as data, not code.** Two Buffett/Lynch-inspired models (v1, a legacy
+value-and-dividend model; v2, which adds ROE, FCF yield, PEG and debt) are encoded as
+rows in `seed_scoring_rules.csv` and applied by a single range join. Adding or changing
+a model is editing a CSV — no Python classes, no re-deploy. Both versions live in one
+table, so `mart_model_comparison` can rank the same universe under both and quantify
+where they disagree.
 
-| Metric | Max Score | Notes |
-|---|---|---|
-| PER | 10 | < 5 → 10pts, < 8 → 7pts, < 10 → 5pts, < 15 → 2pts, ≥ 15 → 0pts |
-| ROE | 15 | > 20% → 15pts, > 15% → 10pts, > 10% → 5pts (Buffett: sustained high ROE signals moat) |
-| FCF Yield | 10 | > 8% → 10pts, > 5% → 7pts, > 3% → 4pts, > 0% → 2pts |
-| PBR | 5 | ROE-linked adjustment: high-ROE firms justify a premium above book value |
-
-### Category 2 — Growth & Financial Safety (30pts)
-
-| Metric | Max Score | Notes |
-|---|---|---|
-| Economic Moat | 10 | *Qualitative* — pricing power, market share, brand (user-entered) |
-| PEG Ratio | 10 | < 0.5 → 10pts, < 1.0 → 7pts, < 1.5 → 4pts, ≥ 1.5 → 0pts (Lynch: PEG < 1 is fair value) |
-| Debt Ratio | 10 | < 30% → 10pts, < 60% → 7pts, < 100% → 4pts, < 200% → 2pts |
-
-### Category 3 — Shareholder Return Policy (30pts)
-
-| Metric | Max Score | Notes |
-|---|---|---|
-| Dividend Yield | 10 | > 7% → 10pts, > 5% → 7pts, > 3% → 5pts, > 0% → 2pts, 0% → 0pts |
-| Dividend Growth | 10 | ≥ 10 consecutive years → 10pts, ≥ 7yrs → 8pts, ≥ 5yrs → 6pts, ≥ 3yrs → 3pts |
-| Share Cancellation | 10 | Confirmed buyback cancellation in past year → 10pts (cancellation only, not mere repurchase) |
-
-### Investment Grade
-
-| Score | Grade | Action |
-|---|---|---|
-| > 80 | A | Strong buy candidate |
-| 70–80 | B | Buy consideration |
-| 50–70 | C | Hold if already owned |
-| < 50 | D | Not recommended |
-
-> Stocks that cannot reach grade C (50pts) even with a perfect qualitative score (10pts moat) are automatically excluded from the leaderboard and exports. This means any stock with a quantitative score below 40 is filtered out.
+**Missing is NULL, never 0.0.** The single worst bug in the old system was defaulting a
+failed fetch or a non-meaningful ratio to zero, which silently poisoned every average
+and rank. Here a failed fetch records its status and leaves the value null; every ratio
+goes through a `safe_divide` macro. The result is *higher* measured null rates than the
+old system reported — because the nulls are now honest rather than hidden.
 
 ---
 
-## Multi-Scorer Architecture
+## Data-quality baseline vs the old system
 
-The scorer is versioned and swappable via a factory pattern, allowing comparison between different evaluation frameworks without affecting existing data.
+Null rate per metric on the full universe (`mart_data_quality`, 954 stocks):
 
-| Version | Description                       | Max Quantitative Score |
-|---|-----------------------------------|---|
-| `v1` | Legacy — PER/PBR/dividend focused | 47pts |
-| `v2` | Current — Lynch's PEG added model | 90pts (+ 10pts qualitative) |
+| Metric | Null rate | Note |
+|---|---:|---|
+| PEG | 40.0% | null unless PER **and** EPS growth are both positive — the true rate |
+| Dividend yield | 23.3% | genuine non-payers |
+| PBR / PER / FCF yield | 2–3% | missing net income or equity |
+| ROE / debt ratio | ~1% | |
+| Dividend-growth years | 0.0% | computed from real dividend history |
 
-- Each version is stored independently in the `scoring_results` table via a `scorer_version` column.
-- To add a new version: create `scorers/vN.py` inheriting `ScorerBase`, then register it in `scorers/__init__.py`'s `_SCORERS` dict.
-
----
-
-## Data Pipeline
-
-```
-[1] fetch    →  raw_financial_data        (DART API / yfinance)
-[2] process  →  processed_financial_data  (EPS, PER, ROE, FCF, PBR, PEG, debt ratio, dividend yield)
-[3] score    →  scoring_results           (per-metric scores + total + grade)
-[4] view     →  terminal leaderboard      (ranked by score, filterable by market/scorer)
-[5] export   →  export/*.csv              (Excel-compatible with formula for qualitative input)
-```
+The old system reported PEG null at ~19% and dividend-growth-years zero at ~16% — both
+**artificially low**, because missing values were defaulted to 0.0 and 39 silent
+`except` blocks swallowed the rest. Surfacing the true 40% PEG-null rate is the point:
+you cannot trust a screen whose gaps are invisible.
 
 ---
 
-## Database Schema
+## What you can analyze
 
-| Table | Purpose |
+The six Gold marts are shaped around concrete questions:
+
+- **Model disagreement** (`mart_model_comparison`) — v1 vs v2 rank correlation is
+  **Spearman 0.616**; the sharpest splits are utilities like **FirstEnergy / Exelon**
+  (v1 loves their dividends, v2 penalizes their debt) versus profitable, low-debt,
+  no-dividend names like **Incyte / Exelixis / Zoom** (v2 rewards what v1 ignores).
+- **Sector-relative valuation** (`mart_sector_valuation`) — each stock's PER/PBR/ROE vs
+  its sector median and vs the sector's own 3-year median, across 11 sectors.
+- **PER vs its own history** (`mart_price_history`) — daily valuation percentile,
+  drawdown from the 1-year high, and realized volatility per stock.
+- **Screening leaderboard** (`mart_leaderboard`) — normalized 0-100 score, grade, and
+  rank, per model, per week.
+- **Score trend** (`mart_score_history`) and **data quality** (`mart_data_quality`)
+  tracked over time.
+
+---
+
+## Scoring models
+
+Both models score a stock 0–100 (normalized so their different maximums are
+comparable), then grade A/B/C/D. The rules are Buffett/Lynch-inspired: reward
+profitability and cash generation, punish debt and value traps (a low PER with no
+growth). v1 is the legacy value-and-dividend model; v2 adds the quality and safety
+signals below. All thresholds live in `dbt/seeds/`.
+
+| Metric | v2 max | Idea |
+|---|---:|---|
+| ROE | 15 | Sustained high ROE signals a moat (Buffett) |
+| PER | 10 | Cheap earnings, but capped so low-PER-no-growth can't dominate |
+| FCF yield | 10 | Real cash generation, not accounting profit |
+| PEG | 10 | Growth-adjusted value (Lynch) |
+| Debt ratio | 10 | Balance-sheet safety |
+| Dividend yield + growth | 20 | Shareholder return and its consistency |
+| Economic moat | 10 | Human qualitative input, via a seed CSV |
+| PBR | 5 | ROE-linked: high-ROE firms justify a premium above book |
+
+---
+
+## Stack
+
+| Layer | Technology |
 |---|---|
-| `companies` | Master list of tickers with name and market |
-| `raw_financial_data` | Raw figures from APIs (price, net income, equity, OCF, CapEx, dividends, etc.) |
-| `processed_financial_data` | Derived metrics (EPS, PER, ROE, FCF yield, PBR, PEG, debt ratio, dividend yield) |
-| `qualitative_assessments` | User-entered qualitative ratings (economic moat, management quality) |
-| `scoring_results` | Final per-metric scores, total score, grade, and scorer version |
-| `fetch_history` | Per-ticker daily fetch status to prevent duplicate collection |
+| Warehouse | Google BigQuery (`asia-northeast3`) |
+| Transformation | dbt-core + dbt-bigquery (dev/prod targets) |
+| Ingestion | Python (yfinance → GCS → BigQuery load) |
+| Orchestration | Apache Airflow (LocalExecutor, Docker Compose) |
+| Storage | Google Cloud Storage (raw landing) |
+| Secrets | Google Secret Manager |
+| Dashboard | Tableau (reads `holdit_gold`) |
 
 ---
 
-## Data Sources
+## Repository layout
 
-### Korean Stocks (KR)
-- **Stock list**: `FinanceDataReader.StockListing('KRX')` sorted by market cap
-- **Financials**: DART `fnlttSinglAcnt.json` — annual business report (most recent fiscal year)
-- **Balance sheet**: DART `fnlttSinglAcntAll.json` — most recent quarterly filing
-- **Dividends**: DART `alotMatter.json` — up to 12 years of dividend history
-- **Share cancellation**: DART disclosure search for '소각' keyword
-- **Current price**: yfinance
-
-### US Stocks (US)
-- **Stock list**: yfinance screener (`yf.screen()`) — NYSE + NASDAQ sorted by market cap; preferred shares (`-P` pattern) excluded
-- **Financials**: yfinance `quarterly_income_stmt` — trailing 12 months (TTM, last 4 quarters)
-- **EPS growth rate**: yfinance `income_stmt` annual EPS CAGR (up to 3 years), falling back to `earningsGrowth`
-- **Balance sheet**: yfinance `quarterly_balance_sheet`
-- **Cash flow**: yfinance `cashflow` (Operating Cash Flow, CapEx)
-- **Dividends**: yfinance annual dividend history
-- **ADR currency mismatch handling**: For tickers where price currency ≠ financial currency, `trailingPE` and `priceToBook` from `yf.info` are used directly
-
----
-
-## Backtesting
-
-`backtest.py` reconstructs historical scores for any ticker without modifying the database.
-
-```bash
-# Score AAPL for the last 5 fiscal years + current DB snapshot
-python3 backtest.py AAPL 5
-
-# Specify exact years
-python3 backtest.py AAPL 2022 2023 2024
-
-# Korean stock
-python3 backtest.py 005930 5
-
-# Compare with legacy scorer
-python3 backtest.py AAPL 5 --scorer v1
 ```
-
-Output is a year-by-year comparison table covering all metrics and per-category scores.
-
----
-
-## Setup
-
-### Prerequisites
-- Python 3.11+
-- [DART API key](https://opendart.fss.or.kr/intro/main.do) (for Korean stocks)
-- PostgreSQL — GCP Cloud SQL (production) **or** Docker Compose (local dev)
-
-### 1. Clone and install dependencies
-
-```bash
-git clone https://github.com/casper-jr/HoldIt.git
-cd HoldIt
-pip install -r requirements.txt
-```
-
-### 2. Configure environment variables
-
-Create a `.env` file in the project root:
-
-```env
-DART_API_KEY=your_dart_api_key_here
-DB_HOST=your_db_host
-DB_PORT=5432
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-DB_NAME=your_db_name
-```
-
-> **Cloud Run environment**: `INSTANCE_CONNECTION_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` are injected automatically via GCP Secret Manager and Cloud Run Job environment variables. No `.env` file needed.
-
-### 3. Start the database
-
-**Option A — Local (Docker):**
-```bash
-docker-compose up -d
-```
-
-**Option B — GCP Cloud SQL (production):**
-The pipeline runs automatically via Cloud Scheduler every Friday at 17:00 KST.
-To trigger manually:
-```bash
-gcloud run jobs execute holdit-weekly --region=asia-northeast3
+ingestion/          Python — moves raw payloads to Bronze, derives nothing
+  main.py           CLI: fetch one (source, endpoint) for a snapshot date
+  sources/          yfinance client (DART client stubbed for a future KR phase)
+bronze/             Bronze table DDL (dbt reads Bronze but never builds it)
+dbt/
+  models/silver/    stg_yf__* (parse) · dim_company · fct_* (conform)
+  models/gold/      fct_metrics · fct_metric_scores · mart_* (analytics)
+  seeds/            scoring rules, model definitions, qualitative moat — as CSV
+  snapshots/        snap_company (SCD2 engine)
+  tests/            lookahead / live-only / not-future assertions
+airflow/            Docker Compose stack + the weekly DAG
+docs/
+  architecture.md   the full To-Be spec and the decisions behind it
+  plan.md           the ordered build worklist
+  as-is.md          frozen analysis of the old system's failures
 ```
 
 ---
 
-## Usage
+## Running it
 
 ```bash
-# [Step 1] Fetch raw data
-python3 main.py fetch kr 100          # Top 100 Korean stocks by market cap
-python3 main.py fetch kr all          # All KRX-listed stocks
-python3 main.py fetch us 50           # Top 50 US stocks by market cap
+# dbt (local dev target → *_dev datasets)
+cd dbt
+GCP_PROJECT=<project> DBT_PROFILES_DIR=. dbt build --target dev
 
-# Force re-fetch a specific ticker (ignores today's fetch history)
-python3 main.py refetch 005930        # Korean stock
-python3 main.py refetch AAPL          # US stock
+# ingestion (writes raw payloads to GCS, then load to Bronze)
+GCP_PROJECT=<project> HOLDIT_RAW_BUCKET=<bucket> \
+  python -m ingestion.main --source yf --endpoint quote --snapshot-date 2026-07-15 --limit 1000
 
-# [Step 2] Process raw data into evaluation metrics
-python3 main.py process               # Today's fetched data only
-python3 main.py process --all         # Reprocess entire database
-
-# [Step 3] Score all processed stocks
-python3 main.py score                 # Today's processed data only (v2 default)
-python3 main.py score --all           # Re-score entire database
-python3 main.py score --all --scorer v1   # Score with legacy v1
-
-# [Step 4] View leaderboard (C grade or above, accounting for max qualitative score)
-python3 main.py view                  # All markets, v2 scorer
-python3 main.py view kr               # Korean stocks only
-python3 main.py view us 20            # Top 20 US stocks
-python3 main.py view kr --scorer v1   # Korean stocks, v1 scorer
-
-# View detailed breakdown for a single stock
-python3 main.py detail 005930         # Korean stock
-python3 main.py detail KO             # US stock
-
-# [Step 5] Export to CSV for qualitative evaluation in Excel
-python3 main.py export                # All markets
-python3 main.py export kr             # Korean stocks only
-python3 main.py export us             # US stocks only
+# Airflow (the weekly path, dbt runs in-container)
+cd airflow && docker compose up
 ```
 
-The exported CSV includes:
-- Raw metric values and per-metric scores
-- A blank column for manual economic moat scoring (0–10)
-- An Excel formula column that auto-calculates the final total score
+Authentication uses Google Application Default Credentials; no credentials live in the
+repo.
 
 ---
 
-## Project Structure
+## Status
 
-```
-holdit/
-├── main.py              # CLI entry point — fetch, process, score, view, export
-├── fetcher.py           # DartFetcher (KR) and USFetcher (US) — API data collection
-├── processor.py         # FinancialProcessor — computes derived metrics from raw data
-├── scorers/             # Scorer package (factory pattern, version-swappable)
-│   ├── __init__.py      #   get_scorer(version) factory + StockScorer alias
-│   ├── base.py          #   ScorerBase — shared score_all(), get_grade(), _save()
-│   ├── v1.py            #   ScorerV1 — legacy (PER/PBR/dividend, max 47pts)
-│   └── v2.py            #   ScorerV2 — Lynch's PEG concept added model (max 100pts) [default]
-├── backtest.py          # Year-by-year historical score reconstruction
-├── models.py            # SQLAlchemy ORM models
-├── database.py          # DB session and engine setup (auto-switches: Cloud SQL connector / psycopg2)
-├── config.py            # Environment variable loading
-├── gcs_upload.py        # Upload export/ CSVs to GCS bucket (Cloud Run pipeline step)
-├── Dockerfile           # Container image build config for Cloud Run Job (linux/amd64)
-├── entrypoint.sh        # Pipeline entry script executed by Cloud Run Job
-├── docker-compose.yml   # PostgreSQL container for local development
-├── requirements.txt     # Python dependencies
-├── scoring_guidelines.md # Scoring rubric with investment philosophy rationale (Korean)
-└── export/              # CSV exports for qualitative review (also uploaded to GCS)
-```
+US path complete: Bronze → Silver → Gold built and tested at full scale, with a Tableau
+analysis layer on top. A Korean (DART) source is a possible second phase, gated on a
+data-coverage probe — the Silver models were designed to conform a second market
+without changing anything downstream.

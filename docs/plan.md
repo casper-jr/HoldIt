@@ -15,8 +15,8 @@
 - [x] Step 3 — Build Bronze and the ingestion path (proven end-to-end; 89-ticker bulk seed loaded)
 - [x] Step 4 — Build Silver (8 models + snapshot, all tests green on prod; DAG gate wired)
 - [x] Step 5 — Build Gold (metrics + scoring + 6 marts; v1/v2 both scored; 77/77 prod build)
-- [~] Step 5.5 — Scale US to the full universe (in progress)
-- [ ] Step 8 — Rewrite `README.md` (with the full-scale data-quality baseline)
+- [x] Step 5.5 — Scale US to the full universe (954 tickers, 100% coverage; warehouse rebuilt 54/54)
+- [x] Step 8 — Rewrite `README.md` (data-warehouse rewrite + 2 hand-off Artifacts delivered)
 - [ ] Step 7 — Create the Tableau dashboard (**user-owned** — done by the user, for interview prep, not the assistant)
 - [ ] Step 6 — Add KR as the second source (**conditional / deferred** — see decision below)
 

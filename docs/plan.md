@@ -16,17 +16,23 @@
 - [x] Step 4 — Build Silver (8 models + snapshot, all tests green on prod; DAG gate wired)
 - [x] Step 5 — Build Gold (metrics + scoring + 6 marts; v1/v2 both scored; 77/77 prod build)
 - [~] Step 5.5 — Scale US to the full universe (in progress)
-- [ ] Step 7 — Create the Tableau dashboard (US first — brought ahead of KR)
+- [ ] Step 8 — Rewrite `README.md` (with the full-scale data-quality baseline)
+- [ ] Step 7 — Create the Tableau dashboard (**user-owned** — done by the user, for interview prep, not the assistant)
 - [ ] Step 6 — Add KR as the second source (**conditional / deferred** — see decision below)
-- [ ] Step 8 — Rewrite `README.md`
 
-> **Sequencing decision (2026-07-15).** US is taken all the way to a finished analysis
-> before any KR work. Order is now: scale US to the full universe → build the Tableau/US
-> analysis (Step 7) → *only then* reconsider KR. **Step 6 (KR) is conditional, not
-> committed**: it starts with a Bronze DART null-rate probe, and if coverage is poor the
-> KR analysis may be dropped entirely rather than forced. `cancel` scoring and KR moat
-> rows stay parked until that decision. The step numbers are kept for continuity; the
-> execution order is 5 → 5.5 → 7 → (maybe) 6 → 8.
+> **Sequencing decision (2026-07-15).** US is taken all the way to a finished, presentable
+> state before any KR work, and the analysis is split by owner:
+> - **Assistant**: scale US to the full universe (5.5) → rewrite `README.md` (8) → then
+>   two hand-off guides — (a) what to explore in the GCP/BigQuery console with SQL at each
+>   layer, and (b) what to focus on in Tableau for maximum resume/interview impact.
+> - **User**: builds the Tableau dashboard and does the analysis themselves (Step 7) —
+>   deliberately, because owning the analysis is what an interview tests.
+> - **Step 6 (KR) is conditional, not committed**: it starts with a Bronze DART null-rate
+>   probe, and if coverage is poor the KR analysis may be dropped rather than forced.
+>   `cancel` scoring and KR moat rows stay parked until then.
+>
+> Step numbers are kept for continuity; execution order is 5 → 5.5 → 8 → (user: 7) →
+> (maybe) 6.
 
 ---
 

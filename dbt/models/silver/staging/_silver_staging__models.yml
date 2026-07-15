@@ -1,0 +1,54 @@
+version: 2
+
+# Staging parses one Bronze table each and nothing more: JSON extraction, unnesting,
+# casting, renaming. No joins, no conforming, no derived values. All columns nullable.
+# Tests here assert the parse produced keys and did not fabricate rows.
+models:
+  - name: stg_yf__quote
+    description: One row per (ticker, snapshot_date). Flat parse of the yfinance info dict — metadata (currency, sector, shares), never price.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: snapshot_date
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
+
+  - name: stg_yf__price_history
+    description: One row per (ticker, snapshot_date, price_date). Unnests the OHLCV range; price_date comes from the payload index, never snapshot_date.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: price_date
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, price_date]
+
+  - name: stg_yf__financials
+    description: Long form — one row per (ticker, snapshot_date, statement, line_item, period_end). Unpivots the three-statement orient='split' matrix so the core model picks line-items by name.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: statement
+        tests:
+          - not_null
+          - accepted_values:
+              values: [income_stmt, balance_sheet, cashflow]
+      - name: line_item
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, statement, line_item, period_end]
+
+  - name: stg_yf__dividends
+    description: One row per (ticker, snapshot_date, ex_date). Unnests the dividend Series — individual cash dividend events, not yet aggregated to fiscal year.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: ex_date
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, ex_date]

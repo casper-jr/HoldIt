@@ -15,8 +15,11 @@ holdit:
       threads: 4
     prod:
       type: bigquery
-      method: service-account
-      keyfile: "{{ env_var('DBT_KEYFILE') }}"
+      # Local Airflow authenticates via the mounted host ADC, the same trust model the
+      # ingestion tasks already use in-container. A cloud deployment swaps this for a
+      # service-account keyfile / workload identity — deferred with the Cloud Run
+      # migration (see architecture.md, Step 3 deviation).
+      method: oauth
       project: "{{ env_var('GCP_PROJECT') }}"
       dataset: holdit
       location: asia-northeast3

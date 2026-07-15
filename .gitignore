@@ -220,4 +220,5 @@ notes.md
 # dbt
 dbt_packages/
 dbt/logs/
+dbt/.user.yml
 airflow/logs/

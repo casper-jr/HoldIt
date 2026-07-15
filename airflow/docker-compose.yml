@@ -19,10 +19,12 @@ x-airflow-common: &airflow-common
     HOLDIT_RAW_BUCKET: holdit-raw
     PYTHONPATH: /opt/airflow
     GOOGLE_APPLICATION_CREDENTIALS: /home/airflow/.config/gcloud/application_default_credentials.json
+    DBT_PROFILES_DIR: /opt/airflow/dbt              # profiles.yml lives in the project dir
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ../ingestion:/opt/airflow/ingestion            # the ingestion CLI, mounted (not baked)
+    - ../dbt:/opt/airflow/dbt                        # the dbt project, mounted (not baked)
     - ${HOME}/.config/gcloud:/home/airflow/.config/gcloud:ro   # host ADC, read-only
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:

@@ -97,7 +97,29 @@ with DAG(
         op_kwargs={"endpoint": "dividends"},
     )
 
+    # Silver: build then test as a hard gate. dbt_run_silver refreshes the seed and
+    # SCD2 snapshot, then rebuilds the Silver models; dbt_test_silver runs every Silver
+    # test (grain uniqueness, the lookahead / reconstruction-labelling asserts). A test
+    # failure fails the task and stops the DAG before Gold — stale-but-correct, never
+    # fresh-but-wrong. Runs against prod (holdit_silver) via the mounted host ADC.
+    DBT = "cd /opt/airflow/dbt && dbt"
+    dbt_run_silver = BashOperator(
+        task_id="dbt_run_silver",
+        bash_command=(
+            f"{DBT} seed --target prod && "
+            f"{DBT} snapshot --target prod && "
+            f"{DBT} run --target prod --select silver"
+        ),
+    )
+    dbt_test_silver = BashOperator(
+        task_id="dbt_test_silver",
+        bash_command=f"{DBT} test --target prod --select silver",
+    )
+
     ingest_quote >> load_quote
     ingest_price >> load_price
     ingest_financials >> load_financials
     ingest_dividends >> load_dividends
+
+    [load_quote, load_price, load_financials, load_dividends] >> dbt_run_silver
+    dbt_run_silver >> dbt_test_silver

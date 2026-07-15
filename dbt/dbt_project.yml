@@ -4,8 +4,24 @@ config-version: 2
 
 profile: 'holdit'
 
+# Reconstruction boundary + filing-lag, referenced by fct_financials_snapshot and
+# the lookahead tests. launch_date is the first live snapshot; rows dated before it
+# are reconstructed from annual filings. us_filing_lag_days is the assumption that
+# US annual results become public 90 days after fiscal year end (yfinance exposes no
+# filing date); KR overrides this with real rcept_dt in Step 6.
+vars:
+  launch_date: '2026-07-14'
+  us_filing_lag_days: 90
+  price_history_years: 5
+
 model-paths: ["models"]
 seed-paths: ["seeds"]
+
+# Seeds are human inputs read by Silver/Gold models; land them in the silver dataset
+# rather than the profile's base dataset so nothing lives outside the layer datasets.
+seeds:
+  holdit:
+    +schema: silver
 snapshot-paths: ["snapshots"]
 macro-paths: ["macros"]
 test-paths: ["tests"]
@@ -18,17 +34,22 @@ clean-targets: ["target", "dbt_packages"]
 # The daily models (fct_price_daily, fct_valuation_daily) override +partition_by
 # to price_date in their own config(); inheriting snapshot_date would partition
 # them on a column they do not have.
+#
+# Silver is `table` (full rebuild) for now, not incremental: with a single seeded
+# snapshot, incremental insert_overwrite buys nothing and the reconstruction model
+# is a full rebuild by nature. Revisit incremental once the weekly DAG accumulates
+# real partition volume — a config change, not a SQL rewrite.
 models:
   holdit:
     silver:
       staging:
         +schema: silver
-        +materialized: incremental
+        +materialized: table
         +partition_by: {field: snapshot_date, data_type: date}
         +cluster_by: [ticker]
       core:
         +schema: silver
-        +materialized: incremental
+        +materialized: table
         +partition_by: {field: snapshot_date, data_type: date}
         +cluster_by: [ticker]
     gold:

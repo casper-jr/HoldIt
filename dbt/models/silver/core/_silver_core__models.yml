@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: dim_company
+    description: SCD2 company dimension. Grain (ticker, valid_from); is_current is the live row.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: market
+        tests:
+          - accepted_values:
+              values: [NASDAQ, NYSE, KOSPI, KOSDAQ]
+      - name: is_current
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, valid_from]
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker]
+          config:
+            where: "is_current"
+
+  - name: fct_price_daily
+    description: The only price source. Grain (ticker, price_date); price_date from the payload index, never snapshot_date.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_company')
+              field: ticker
+      - name: price_date
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, price_date]
+
+  - name: fct_financials_snapshot
+    description: Fundamentals at grain (ticker, snapshot_date), no price. Two eras (live + reconstructed) unified by one filing-lag as-of join; is_reconstructed labels provenance.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_company')
+              field: ticker
+      - name: snapshot_date
+        tests: [not_null]
+      - name: is_reconstructed
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
+
+  - name: fct_dividend_history
+    description: Observed dividend history at grain (ticker, fiscal_year). Replaces the As-Is fetch-time "consecutive increase years" integer.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_company')
+              field: ticker
+      - name: fiscal_year
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, fiscal_year]

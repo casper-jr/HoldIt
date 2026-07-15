@@ -4,3 +4,4 @@ yfinance==1.2.0
 google-cloud-storage==2.17.0
 google-cloud-secret-manager==2.20.0
 google-cloud-bigquery==3.25.0
+dbt-bigquery==1.8.3        # Silver/Gold transforms run in-container (dbt_run/test tasks)

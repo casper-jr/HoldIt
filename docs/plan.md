@@ -12,8 +12,8 @@
 - [x] Step 0 — Clarify the goal
 - [x] Step 1 — Decide what survives
 - [x] Step 2 — Reset GCP and stand up the skeleton
-- [~] Step 3 — Build Bronze and the ingestion path (path proven on a 20-ticker slice; scale-up pending)
-- [ ] Step 4 — Build Silver
+- [x] Step 3 — Build Bronze and the ingestion path (proven end-to-end; 89-ticker bulk seed loaded)
+- [x] Step 4 — Build Silver (8 models + snapshot, all tests green on prod; DAG gate wired)
 - [ ] Step 5 — Build Gold
 - [ ] Step 6 — Add KR as the second source
 - [ ] Step 7 — Create the Tableau dashboard
@@ -66,6 +66,13 @@
 	- `fct_price_daily` holds ~250 rows per ticker per backfilled year, and one ticker's `close` differs across 3 consecutive snapshot dates
 	- `fct_financials_snapshot` holds 3 distinct rows for one ticker across 3 snapshots. If they are identical, the time dimension does not exist yet
 	- No reconstructed row has `fundamentals_asof_date > snapshot_date`. That test failing means lookahead bias is in the data
+- **Progress (2026-07-15)** — Step 4 complete, all exit criteria met on prod (`holdit_silver`):
+	- 4 `stg_yf__*` staging models (parse-only; financials unpivots the orient='split' matrix to long form). 4 core models + `snap_company`/`dim_company` SCD2. 34 tests pass, incl. `assert_no_lookahead` and `assert_reconstruction_is_labelled`
+	- `fct_price_daily` (107.1k rows): AAPL spans 2021→2026 (~250/ticker/yr) with `price_date` from the payload index, `is_backfilled` splitting bulk vs live
+	- `fct_financials_snapshot` (23.3k rows): AAPL shows FY22/FY23/FY24 net income across three reconstructed Fridays, then the live FY25 row (`is_reconstructed=false`) — the time dimension. Filing lag = period_end + 90d (US), a `us_filing_lag_days` var; boundary is the `launch_date` var (`2026-07-14`)
+	- **Deviations, deliberate** : Silver materializes to `table` not `incremental` (premature with one snapshot — a config change later, not a rewrite); `dim_company` SCD2 accrues forward, not retro from Bronze partitions; `dividend_fiscal_year` dropped from `fct_financials_snapshot` (it duplicates `fct_dividend_history`). All three recorded in `architecture.md`
+	- DAG gate `dbt_run_silver → dbt_test_silver` wired in `holdit_weekly.py` (runs `--target prod` via mounted host ADC); `dbt-bigquery` added to the image + dbt project mounted. Proven from host via the identical commands; in-container run needs `docker compose build` (image rebuild)
+	- **Remaining before Step 5** : rebuild the Airflow image to run the gate in-container; drop the stray `holdit.seed_exchange_mapping` left in the legacy base dataset by the first seed run
 
 ### Step 5 — Build Gold
 - `fct_metrics` (weekly) → `int_metrics_unpivot` → seeds → `fct_metric_scores` via the range join

@@ -1,0 +1,15 @@
+version: 2
+
+# Bronze is a source, not a model: dbt reads and tests it, never builds it. The
+# four raw_yf_* tables are the only irreplaceable thing in the warehouse — every
+# Silver/Gold model is derivable from them plus the repo. Grain here is one row per
+# (ticker, snapshot_date): the payload is native JSON, parsed only in stg_yf__*.
+sources:
+  - name: bronze
+    database: "{{ env_var('GCP_PROJECT') }}"
+    schema: holdit_bronze
+    tables:
+      - name: raw_yf_quote
+      - name: raw_yf_price_history
+      - name: raw_yf_financials
+      - name: raw_yf_dividends

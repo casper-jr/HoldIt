@@ -1,0 +1,9 @@
+version: 2
+
+seeds:
+  - name: seed_exchange_mapping
+    description: yfinance exchange codes -> real market names. NMS/NYQ now; KR codes (KOSPI/KOSDAQ) added with the DART source in Step 6.
+    config:
+      column_types:
+        exchange_code: string
+        market: string

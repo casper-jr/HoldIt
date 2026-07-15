@@ -15,9 +15,18 @@
 - [x] Step 3 — Build Bronze and the ingestion path (proven end-to-end; 89-ticker bulk seed loaded)
 - [x] Step 4 — Build Silver (8 models + snapshot, all tests green on prod; DAG gate wired)
 - [x] Step 5 — Build Gold (metrics + scoring + 6 marts; v1/v2 both scored; 77/77 prod build)
-- [ ] Step 6 — Add KR as the second source
-- [ ] Step 7 — Create the Tableau dashboard
+- [~] Step 5.5 — Scale US to the full universe (in progress)
+- [ ] Step 7 — Create the Tableau dashboard (US first — brought ahead of KR)
+- [ ] Step 6 — Add KR as the second source (**conditional / deferred** — see decision below)
 - [ ] Step 8 — Rewrite `README.md`
+
+> **Sequencing decision (2026-07-15).** US is taken all the way to a finished analysis
+> before any KR work. Order is now: scale US to the full universe → build the Tableau/US
+> analysis (Step 7) → *only then* reconsider KR. **Step 6 (KR) is conditional, not
+> committed**: it starts with a Bronze DART null-rate probe, and if coverage is poor the
+> KR analysis may be dropped entirely rather than forced. `cancel` scoring and KR moat
+> rows stay parked until that decision. The step numbers are kept for continuity; the
+> execution order is 5 → 5.5 → 7 → (maybe) 6 → 8.
 
 ---
 

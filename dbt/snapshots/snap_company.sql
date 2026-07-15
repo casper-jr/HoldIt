@@ -1,7 +1,7 @@
 {% snapshot snap_company %}
 {{
     config(
-        schema='silver',
+        target_schema=('holdit_silver' if target.name == 'prod' else 'holdit_silver_' ~ target.name),
         unique_key='ticker',
         strategy='check',
         check_cols=['name', 'market', 'sector', 'industry', 'currency', 'financial_currency'],

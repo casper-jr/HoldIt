@@ -7,3 +7,29 @@ seeds:
       column_types:
         exchange_code: string
         market: string
+
+  - name: seed_scoring_rules
+    description: Scoring thresholds as data, not code. One row per (model_version, metric) band; range-joined on value >= min_value AND value < max_value. Encodes the v1 and v2 Python scorers.
+    config:
+      column_types:
+        model_version: string
+        metric: string
+        min_value: float64
+        max_value: float64
+        points: int64
+
+  - name: seed_scoring_models
+    description: Per-model metric roster and max_points, used to normalize different model maximums (v1=47, v2=100) to 0-100. is_qualitative flags the moat, which is added directly rather than range-joined.
+    config:
+      column_types:
+        model_version: string
+        metric: string
+        max_points: int64
+        is_qualitative: boolean
+
+  - name: seed_qualitative_moat
+    description: The human moat score (0-10), git-tracked. Illustrative wide-moat assessments; tickers absent here score 0 via left join. Replaces the Excel =W2+X2 loop.
+    config:
+      column_types:
+        ticker: string
+        moat_points: int64

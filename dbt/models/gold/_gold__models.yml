@@ -1,0 +1,80 @@
+version: 2
+
+models:
+  - name: fct_metrics
+    description: Weekly metrics at grain (ticker, snapshot_date), live-only. Replaces processor.py.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_company'), field: ticker}
+      - name: snapshot_date
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
+
+  - name: int_metrics_unpivot
+    description: fct_metrics long form at grain (ticker, snapshot_date, metric).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, metric]
+
+  - name: fct_valuation_daily
+    description: Daily price-driven ratios at grain (ticker, price_date), as-of join across both eras. Not scored.
+    columns:
+      - name: price_date
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, price_date]
+
+  - name: fct_metric_scores
+    description: Per-metric points at grain (ticker, snapshot_date, model_version, metric).
+    columns:
+      - name: points
+        tests: [not_null]
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, model_version, metric]
+
+  - name: mart_leaderboard
+    description: Screening leaderboard at grain (ticker, snapshot_date, model_version); normalized score, grade, rank.
+    columns:
+      - name: grade
+        tests:
+          - not_null
+          - accepted_values: {values: [A, B, C, D]}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, model_version]
+
+  - name: mart_model_comparison
+    description: v1 vs v2 per ticker with rank delta and Spearman correlation.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
+
+  - name: mart_score_history
+    description: Score trend across snapshots per (ticker, model_version).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, model_version]
+
+  - name: mart_sector_valuation
+    description: Sector-relative valuation at the latest snapshot; grain (ticker).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker]
+
+  - name: mart_price_history
+    description: Daily price + valuation series with drawdown, PER percentile, volatility. Grain (ticker, price_date).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, price_date]
+
+  - name: mart_data_quality
+    description: Null rate and row count per metric per snapshot.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [snapshot_date, metric]

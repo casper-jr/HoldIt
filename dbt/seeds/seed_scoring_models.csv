@@ -1,0 +1,16 @@
+model_version,metric,max_points,is_qualitative
+v1,per,20,false
+v1,pbr,5,false
+v1,dividend_yield,10,false
+v1,div_growth_years,5,false
+v1,cancel,7,false
+v2,per,10,false
+v2,roe,15,false
+v2,fcf_yield,10,false
+v2,pbr,5,false
+v2,moat,10,true
+v2,peg,10,false
+v2,debt_ratio,10,false
+v2,dividend_yield,10,false
+v2,div_growth_years,10,false
+v2,cancel,10,false

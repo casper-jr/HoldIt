@@ -1,10 +1,10 @@
 """holdit_weekly — the ingest -> load-Bronze path, keyed on {{ ds }}.
 
-Step 3 scope: US yf quote + price_history. Each endpoint is fetched by the
-ingestion CLI (writes verbatim payloads to GCS, clearing the {ds} prefix first)
-then loaded into its Bronze partition with WRITE_TRUNCATE, which makes a re-run of
-a date idempotent. dbt (Silver/Gold) tasks join this DAG in Steps 4-5; DART
-endpoints in Step 6.
+US yf quote + price_history + financials + dividends. Each endpoint is fetched by
+the ingestion CLI (writes verbatim payloads to GCS, clearing the {ds} prefix first)
+then loaded into its Bronze partition with WRITE_TRUNCATE, which makes a re-run of a
+date idempotent. dbt then builds and tests Silver and Gold in-container, with
+dbt_test_silver a hard gate between the layers. DART endpoints join in Step 6.
 
 Every task is keyed on {{ ds }} and nothing calls date.today(), so any date is
 re-runnable via `airflow dags backfill`. price_history's range is derived from ds
@@ -116,10 +116,24 @@ with DAG(
         bash_command=f"{DBT} test --target prod --select silver",
     )
 
+    # Gold: built and tested only after Silver's gate passes. Seeds (scoring rules /
+    # qualitative moat) are reloaded here so a rule change ships by editing a CSV.
+    dbt_run_gold = BashOperator(
+        task_id="dbt_run_gold",
+        bash_command=(
+            f"{DBT} seed --target prod && "
+            f"{DBT} run --target prod --select gold"
+        ),
+    )
+    dbt_test_gold = BashOperator(
+        task_id="dbt_test_gold",
+        bash_command=f"{DBT} test --target prod --select gold",
+    )
+
     ingest_quote >> load_quote
     ingest_price >> load_price
     ingest_financials >> load_financials
     ingest_dividends >> load_dividends
 
     [load_quote, load_price, load_financials, load_dividends] >> dbt_run_silver
-    dbt_run_silver >> dbt_test_silver
+    dbt_run_silver >> dbt_test_silver >> dbt_run_gold >> dbt_test_gold

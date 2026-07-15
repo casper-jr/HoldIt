@@ -14,7 +14,7 @@
 - [x] Step 2 — Reset GCP and stand up the skeleton
 - [x] Step 3 — Build Bronze and the ingestion path (proven end-to-end; 89-ticker bulk seed loaded)
 - [x] Step 4 — Build Silver (8 models + snapshot, all tests green on prod; DAG gate wired)
-- [ ] Step 5 — Build Gold
+- [x] Step 5 — Build Gold (metrics + scoring + 6 marts; v1/v2 both scored; 77/77 prod build)
 - [ ] Step 6 — Add KR as the second source
 - [ ] Step 7 — Create the Tableau dashboard
 - [ ] Step 8 — Rewrite `README.md`
@@ -81,6 +81,13 @@
 - Add v1 as **seed rows only, zero code change** — the proof that the model-comparison problem is solved
 - Build the six `mart_*` models
 - Fix the real scoring bugs while translating : the moat is 10 structurally-zero points (now fed by the seed), and grade thresholds (A > 80) assume a 100-point scale the model never reaches
+- **Progress (2026-07-15)** — Step 5 complete, whole warehouse builds 77/77 on prod:
+	- `fct_metrics` (live-only, 109 rows) via `safe_divide`; PEG from the annual EPS series and `div_growth_years` from `fct_dividend_history` — both computed where the As-Is left them null. `int_metrics_unpivot` (817 rows) long form for one range join
+	- `fct_metric_scores` (923 rows): range join to `seed_scoring_rules` (43 bands, v1+v2). Hand-verified AAPL — v1 total 12, v2 total 42, incl. the v2 PBR-ROE bonus giving pbr 3 despite pbr 63.7. `fct_valuation_daily` (106.9k) as-of join proven lookahead-free (AAPL PER stays NULL until FY22 files 2022-12-29). `assert_scores_are_live_only` passes
+	- Six marts. `mart_leaderboard` normalizes to 0-100 (v1=47, v2=100 max) and grades on that — the A>80 bug fixed. `mart_model_comparison`: v1↔v2 Spearman 0.509, BABA #2 (v1) vs #64 (v2). Sector/price-history/data-quality marts shaped for the Analysis Questions
+	- **Deviations, deliberate** (in `architecture.md`): (1) `scorers/` was already deleted in Step 1, and `stock_scores` in Step 2, so "reproduce v2's scores" is validated by faithful threshold encoding + hand-checks, not a row diff against deleted data; (2) v2's PBR-ROE bonus is a SQL `CASE`, the one rule not expressible as a pure seed row; (3) `cancel` (share-cancellation) is DART-only → 0 for US now, returns Step 6; (4) `div_growth_years` is approximate (calendar-year dividend aggregation); (5) `dividend_yield` deferred from `fct_valuation_daily` (weekly-only); (6) skipped `assert_per_within_range` / `assert_debt_ratio_non_negative` — both encode false invariants (negative equity legitimately yields negative debt_ratio)
+	- DAG extended `dbt_run_gold → dbt_test_gold`; seeds reloaded in `dbt_run_gold`
+	- **Data-state note**: the latest snapshot in-warehouse is the 2026-07-15 20-ticker financials proof slice, so "current" marts (`mart_sector_valuation`) use 20 tickers; the 89-ticker set is 2026-07-14. A full weekly run makes latest complete
 
 ### Step 6 — Add KR as the second source
 - Repeat Step 3 for the DART endpoints, then conform into the **existing** Silver models

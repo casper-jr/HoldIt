@@ -371,6 +371,13 @@ BigQuery
 	- `mart_sector_valuation` — PER/PBR/ROE vs sector median and vs the sector's own 3-year median. Both halves of the ratio backfill : prices exactly, fundamentals by reconstruction. `is_reconstructed` carries through, and Tableau captions any chart whose window reaches before launch — a reconstructed median is an estimate, and an uncaptioned estimate is a lie
 	- `mart_price_history` — daily price and valuation series per ticker with trailing percentiles, drawdown, and volatility. Reads `fct_valuation_daily`
 	- `mart_data_quality` — null rate and row count per metric per snapshot, tracked over time as a first-class table
+	- **Built Step 5 — deviations from the pure design, deliberate**:
+		- The "scoring is data, not code" claim holds for every metric except **v2's PBR score, which depends on ROE** (a high-ROE stock earns a book-value premium). That two-variable rule can't be one `(min,max,points)` row, so it is a `CASE` in `fct_metric_scores` that replaces the v2 pbr range-join row. The other seven metrics stay pure seed rows
+		- **`cancel` (share-cancellation) is DART-only** — yfinance does not expose it — so it scores 0 for the US universe now and returns with KR in Step 6. It stays in `seed_scoring_models` (theoretical max) so normalization is honest about the unreachable points
+		- **`moat` is added directly from `seed_qualitative_moat`** (0-10), not range-joined — `is_qualitative` in `seed_scoring_models` flags it. This is the fix for the structurally-zero moat bug
+		- **Grades are computed on the normalized 0-100 score**, fixing the A>80-on-a-scale-that-never-reaches-100 bug
+		- **"Reproduce v2's scores" is validated by construction, not a row diff** — `scorers/` was deleted in Step 1 and `stock_scores` in Step 2, so there is no stored output to diff. The seed faithfully encodes the v2 threshold function and scores were hand-checked (AAPL v2 = 42)
+		- `dividend_yield` is left to weekly `fct_metrics`, not `fct_valuation_daily` (a daily per-year dividend as-of join for marginal value). `div_growth_years` is approximate — calendar-year dividend aggregation, so a payment-timing shift can break a streak; it does not affect grades since ≥10 years already caps the points
 - ### Orchestration
 	- DAG `holdit_weekly`, schedule `0 8 * * 5`, `catchup=True`, retries with exponential backoff on every task
 	- `ingest_us` → `ingest_kr` → `load_bronze` → `dbt_run_silver` → `dbt_test_silver` → `dbt_run_gold` → `dbt_test_gold` → `refresh_tableau`

@@ -40,6 +40,7 @@ annual_filings as (
         max(if(statement = 'balance_sheet' and line_item = 'Stockholders Equity',   value, null)) as stockholders_equity,
         max(if(statement = 'balance_sheet' and line_item = 'Total Debt',            value, null)) as total_debt,
         max(if(statement = 'balance_sheet' and line_item = 'Total Assets',          value, null)) as total_assets,
+        max(if(statement = 'balance_sheet' and line_item = 'Total Liabilities Net Minority Interest', value, null)) as total_liabilities,
         max(if(statement = 'cashflow'      and line_item = 'Free Cash Flow',        value, null)) as free_cash_flow
     from financials
     where period_end is not null
@@ -84,6 +85,7 @@ select
     af.stockholders_equity,
     af.total_debt,
     af.total_assets,
+    af.total_liabilities,
     af.free_cash_flow,
     af.period_end   as income_period_end,
     af.period_end   as balance_period_end,

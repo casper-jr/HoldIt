@@ -7,11 +7,24 @@
 -- PEG and div_growth_years, which the As-Is left null / fetch-time, are computed here
 -- from the annual EPS series and fct_dividend_history — a deliberate improvement over
 -- the old scorer (architecture.md, Step 5).
+--
+-- Currency resolution (the ADR case): PER/PBR/FCF-yield divide the price (price currency)
+-- by statement figures (financial currency). When they differ — a US-listed ADR of a
+-- foreign company — the raw ratio is meaningless. PER falls back to Yahoo's
+-- currency-consistent trailingPE; PBR and FCF-yield have no reliable currency-consistent
+-- source and are left NULL rather than wrong. ROE and debt_ratio are currency-safe
+-- (both sides in the financial currency).
 
 with fundamentals as (
     select *
     from {{ ref('fct_financials_snapshot') }}
     where not is_reconstructed
+),
+
+-- quote carries the two currencies and Yahoo's trailingPE for the ADR fallback
+quote as (
+    select ticker, snapshot_date, currency, financial_currency, trailing_pe
+    from {{ ref('stg_yf__quote') }}
 ),
 
 -- as-of price: the latest trading day on or before the snapshot
@@ -97,12 +110,24 @@ joined as (
         f.free_cash_flow,
         g.eps_growth_rate,
         d.div_growth_years,
-        ld.annual_dividend
+        ld.annual_dividend,
+        q.currency,
+        q.financial_currency,
+        q.trailing_pe
     from fundamentals f
     left join price_asof pr on pr.ticker = f.ticker and pr.snapshot_date = f.snapshot_date
     left join eps_growth g on g.ticker = f.ticker
     left join div_growth d on d.ticker = f.ticker
     left join latest_dps ld on ld.ticker = f.ticker
+    left join quote q on q.ticker = f.ticker and q.snapshot_date = f.snapshot_date
+),
+
+-- true only for ADRs whose price and financial currencies differ
+currency_flagged as (
+    select *,
+        (financial_currency is not null and currency is not null
+         and currency != financial_currency) as ccy_mismatch
+    from joined
 ),
 
 metrics as (
@@ -110,15 +135,24 @@ metrics as (
         ticker,
         snapshot_date,
         close,
-        {{ safe_divide('close * shares_outstanding', 'net_income') }}         as per,
-        {{ safe_divide('close * shares_outstanding', 'stockholders_equity') }} as pbr,
+        case
+            when ccy_mismatch then trailing_pe
+            else {{ safe_divide('close * shares_outstanding', 'net_income') }}
+        end as per,
+        case
+            when ccy_mismatch then null
+            else {{ safe_divide('close * shares_outstanding', 'stockholders_equity') }}
+        end as pbr,
         {{ safe_divide('net_income', 'stockholders_equity') }} * 100          as roe,
-        {{ safe_divide('free_cash_flow', 'close * shares_outstanding') }} * 100 as fcf_yield,
+        case
+            when ccy_mismatch then null
+            else {{ safe_divide('free_cash_flow', 'close * shares_outstanding') }} * 100
+        end as fcf_yield,
         {{ safe_divide('total_liabilities', 'stockholders_equity') }} * 100   as debt_ratio,
         {{ safe_divide('annual_dividend', 'close') }} * 100                   as dividend_yield,
         eps_growth_rate,
         coalesce(div_growth_years, 0) as div_growth_years
-    from joined
+    from currency_flagged
 )
 
 select

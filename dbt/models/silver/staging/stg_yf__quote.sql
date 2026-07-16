@@ -21,5 +21,8 @@ select
     safe_cast(json_value(payload, '$.marketCap')         as int64)  as market_cap,
     -- price fields kept for completeness; quote price is not the price source
     safe_cast(json_value(payload, '$.currentPrice')  as float64)    as current_price,
-    safe_cast(json_value(payload, '$.previousClose') as float64)    as previous_close
+    safe_cast(json_value(payload, '$.previousClose') as float64)    as previous_close,
+    -- Yahoo's own currency-consistent PER, used in fct_metrics to recover a valid PER
+    -- for ADRs whose price currency differs from their financial currency.
+    safe_cast(json_value(payload, '$.trailingPE')    as float64)    as trailing_pe
 from source

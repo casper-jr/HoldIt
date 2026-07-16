@@ -16,6 +16,10 @@ ORDER BY m.roe DESC
 LIMIT 10;
 
 -- Q2. Cheapest 10 profitable stocks by PER.
+-- PER is currency-resolved in fct_metrics: for ADRs whose price currency differs from
+-- their financial currency, it uses Yahoo's currency-consistent trailingPE instead of
+-- the raw price/earnings mix. So this ranking is meaningful across US names and foreign
+-- ADRs alike.
 SELECT m.ticker, c.name, c.sector, ROUND(m.per, 1) AS per
 FROM holdit_gold.fct_metrics m
 JOIN holdit_silver.dim_company c ON c.ticker = m.ticker AND c.is_current
